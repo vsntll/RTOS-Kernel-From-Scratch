@@ -1,0 +1,45 @@
+#ifndef RTOS_TASK_H
+#define RTOS_TASK_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <ucontext.h>
+
+#define TASK_DEFAULT_STACK_SIZE (64 * 1024)
+#define TASK_NAME_MAX 16
+
+typedef enum {
+    TASK_READY,
+    TASK_RUNNING,
+    TASK_BLOCKED,
+    TASK_TERMINATED
+} task_state_t;
+
+typedef void (*task_entry_t)(void *arg);
+
+typedef struct task {
+    int id;
+    char name[TASK_NAME_MAX];
+    ucontext_t context;
+    unsigned char *stack;
+    size_t stack_size;
+    task_state_t state;
+    int priority;
+    task_entry_t entry;
+    void *arg;
+} task_t;
+
+/* Allocates a stack and sets up an initial context so that when the task
+ * is first switched to, it starts executing `entry(arg)`. The task starts
+ * in TASK_READY state; nothing runs until something switches to it. */
+task_t *task_create(const char *name, task_entry_t entry, void *arg,
+                     int priority, size_t stack_size);
+
+void task_destroy(task_t *task);
+
+/* Low-level primitive: saves the caller's register/stack state into `old`
+ * and restores `new`'s. No scheduler bookkeeping happens here -- that's
+ * layered on top in scheduler.c. */
+void context_switch(task_t *old, task_t *new);
+
+#endif
