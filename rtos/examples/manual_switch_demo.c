@@ -43,13 +43,13 @@ static void task_b_entry(void *arg) {
 }
 
 int main(void) {
-    g_task_a = task_create("A", task_a_entry, NULL, 0, 0);
-    g_task_b = task_create("B", task_b_entry, NULL, 0, 0);
-
     /* Whichever task is running when g_remaining_prints hits zero just
-     * returns from its entry function; uc_link sends control back here. */
-    g_task_a->context.uc_link = &g_main_ctx;
-    g_task_b->context.uc_link = &g_main_ctx;
+     * returns from its entry function; return_ctx sends control back here.
+     * This has to be passed into task_create() itself -- glibc's
+     * makecontext() bakes uc_link in at call time, so assigning it on the
+     * ucontext_t afterwards is silently ignored. */
+    g_task_a = task_create("A", task_a_entry, NULL, 0, 0, &g_main_ctx);
+    g_task_b = task_create("B", task_b_entry, NULL, 0, 0, &g_main_ctx);
 
     printf("Phase 1 demo: manual context switching, no scheduler\n");
     swapcontext(&g_main_ctx, &g_task_a->context);
