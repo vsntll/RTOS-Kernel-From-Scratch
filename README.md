@@ -154,7 +154,7 @@ milestone rather than a big-bang implementation:
 
 - [x] Phase 1 — Task representation and context switching
 - [x] Phase 2 — Cooperative scheduler
-- [ ] Phase 3 — Preemption via timer interrupt
+- [x] Phase 3 — Preemption via timer interrupt
 - [ ] Phase 4 — Priority scheduling + priority inversion fix
 - [ ] Phase 5 — Synchronization primitives (mutex, semaphore, queue)
 - [ ] Phase 6 — Timing and delays (`task_sleep`)
