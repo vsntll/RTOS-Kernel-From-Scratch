@@ -31,14 +31,32 @@ task_t *scheduler_current_task(void) {
     return g_tasks[g_current_idx];
 }
 
+/* Highest-priority READY task wins; ties are broken round-robin so equal
+ * priority tasks still share the CPU fairly instead of one starving the
+ * rest. */
 static int pick_next_ready(void) {
     if (g_num_tasks == 0) {
         return -1;
     }
+
+    int best_priority = 0;
+    int have_candidate = 0;
+    for (int i = 0; i < g_num_tasks; i++) {
+        if (g_tasks[i]->state == TASK_READY &&
+            (!have_candidate || g_tasks[i]->priority > best_priority)) {
+            best_priority = g_tasks[i]->priority;
+            have_candidate = 1;
+        }
+    }
+    if (!have_candidate) {
+        return -1;
+    }
+
     int start = (g_current_idx < 0) ? 0 : (g_current_idx + 1) % g_num_tasks;
     for (int i = 0; i < g_num_tasks; i++) {
         int idx = (start + i) % g_num_tasks;
-        if (g_tasks[idx]->state == TASK_READY) {
+        if (g_tasks[idx]->state == TASK_READY &&
+            g_tasks[idx]->priority == best_priority) {
             return idx;
         }
     }
