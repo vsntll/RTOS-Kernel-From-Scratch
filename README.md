@@ -156,7 +156,7 @@ milestone rather than a big-bang implementation:
 - [x] Phase 2 — Cooperative scheduler
 - [x] Phase 3 — Preemption via timer interrupt
 - [x] Phase 4 — Priority scheduling + priority inversion fix
-- [ ] Phase 5 — Synchronization primitives (mutex, semaphore, queue)
+- [x] Phase 5 — Synchronization primitives (mutex, semaphore, queue)
 - [ ] Phase 6 — Timing and delays (`task_sleep`)
 - [ ] Phase 7 — Testing and hardening (fuzzing, stack canaries)
 - [ ] Phase 8 (stretch) — Port to real Cortex-M target under Renode/QEMU
