@@ -8,7 +8,7 @@
 #define TASK_DEFAULT_STACK_SIZE (64 * 1024)
 #define TASK_NAME_MAX 16
 
-/* Written at both ends of a task's stack at creation time; checked on
+/* Written at the bottom of a task's stack at creation time; checked on
  * every context switch to catch stack overflow before it silently
  * corrupts adjacent memory. */
 #define TASK_CANARY_SIZE 16
