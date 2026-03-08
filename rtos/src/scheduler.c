@@ -158,7 +158,20 @@ void task_yield(void) {
  * the switch through the sigreturn path. That segfaulted -- the fpregs
  * pointer inside a signal-frame ucontext_t isn't interchangeable with one
  * from a plain getcontext()/makecontext() task, so overwriting it wholesale
- * corrupts FPU state restoration. Plain swapcontext() sidesteps that.) */
+ * corrupts FPU state restoration. Plain swapcontext() sidesteps that.)
+ *
+ * Sharper edge, found via the Phase 7 stack-canary check: the signal
+ * frame for a preempted task lives on *that task's own stack*, and it
+ * only gets reclaimed when the handler invocation that pushed it actually
+ * returns (via sigreturn) -- which only happens once the task is
+ * rescheduled and resumes past its swapcontext() call. With
+ * ticks_per_slice=1, a task that never yields can get re-preempted again
+ * the moment it resumes, before it finishes unwinding the *previous*
+ * pending frame, stacking another one underneath. Over hundreds of ticks
+ * that grows without bound and eventually overflows the stack. Bounding
+ * pending_preemptions to 1 per task -- skip forcing a new switch while a
+ * prior one for that same task hasn't resumed and unwound yet -- gives it
+ * a tick to finish unwinding before piling on another. */
 
 static volatile sig_atomic_t g_preempt_enabled = 0;
 static volatile uint64_t g_tick_count = 0;
@@ -199,6 +212,12 @@ static void preempt_handler(int sig) {
         return;
     }
 
+    if (cur->pending_preemptions > 0) {
+        /* cur is still unwinding a previous forced switch -- give it this
+         * tick to finish rather than stacking another one on top. */
+        return;
+    }
+
     g_ticks_since_switch++;
     if (g_ticks_since_switch < g_ticks_per_slice) {
         return;
@@ -215,9 +234,11 @@ static void preempt_handler(int sig) {
 
     g_current_idx = next_idx;
     g_tasks[next_idx]->state = TASK_RUNNING;
+    cur->pending_preemptions++;
     swapcontext(&cur->context, &g_tasks[next_idx]->context);
     /* Control resumes here whenever cur is switched back in, at which
      * point this handler invocation returns normally. */
+    cur->pending_preemptions--;
 }
 
 void scheduler_enable_preemption(int tick_ms, int ticks_per_slice) {

@@ -42,6 +42,12 @@ typedef struct task {
      * READY-but-not-running, sampled once per timer tick. */
     uint64_t ticks_run;
     uint64_t ticks_ready;
+
+    /* Nonzero while a forced (preemptive) switch away from this task
+     * hasn't yet been resumed and returned from -- see the note above
+     * preempt_handler() in scheduler.c for why this has to be bounded to
+     * avoid unbounded signal-frame stacking on the task's own stack. */
+    int pending_preemptions;
 } task_t;
 
 /* Allocates a stack and sets up an initial context so that when the task
