@@ -116,13 +116,33 @@ void task_yield(void) {
 
 static volatile sig_atomic_t g_preempt_enabled = 0;
 static volatile uint64_t g_tick_count = 0;
+static int g_tick_ms = 1;
 static int g_ticks_per_slice = 1;
 static int g_ticks_since_switch = 0;
 static struct sigaction g_prev_sigaction;
 
+/* Runs every tick regardless of whether a slice boundary is reached this
+ * time: samples per-task run/ready timing stats, and wakes any task whose
+ * task_sleep() deadline has passed. */
+static void update_tick_bookkeeping(void) {
+    for (int i = 0; i < g_num_tasks; i++) {
+        task_t *t = g_tasks[i];
+        if (t->state == TASK_RUNNING) {
+            t->ticks_run++;
+        } else if (t->state == TASK_READY) {
+            t->ticks_ready++;
+        } else if (t->state == TASK_BLOCKED && t->wake_tick != 0 &&
+                   g_tick_count >= t->wake_tick) {
+            t->wake_tick = 0;
+            t->state = TASK_READY;
+        }
+    }
+}
+
 static void preempt_handler(int sig) {
     (void)sig;
     g_tick_count++;
+    update_tick_bookkeeping();
 
     if (!g_preempt_enabled || g_current_idx < 0) {
         return;
@@ -155,6 +175,7 @@ static void preempt_handler(int sig) {
 }
 
 void scheduler_enable_preemption(int tick_ms, int ticks_per_slice) {
+    g_tick_ms = (tick_ms > 0) ? tick_ms : 1;
     g_ticks_per_slice = (ticks_per_slice > 0) ? ticks_per_slice : 1;
     g_ticks_since_switch = 0;
 
@@ -186,4 +207,19 @@ void scheduler_disable_preemption(void) {
 
 uint64_t scheduler_tick_count(void) {
     return g_tick_count;
+}
+
+void task_sleep(int ms) {
+    if (g_current_idx < 0 || ms <= 0) {
+        return;
+    }
+    task_t *cur = g_tasks[g_current_idx];
+
+    int ticks_to_wait = ms / g_tick_ms;
+    if (ticks_to_wait <= 0) {
+        ticks_to_wait = 1;
+    }
+    cur->wake_tick = g_tick_count + (uint64_t)ticks_to_wait;
+    cur->state = TASK_BLOCKED;
+    task_yield();
 }
