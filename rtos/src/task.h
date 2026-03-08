@@ -8,6 +8,12 @@
 #define TASK_DEFAULT_STACK_SIZE (64 * 1024)
 #define TASK_NAME_MAX 16
 
+/* Written at both ends of a task's stack at creation time; checked on
+ * every context switch to catch stack overflow before it silently
+ * corrupts adjacent memory. */
+#define TASK_CANARY_SIZE 16
+#define TASK_CANARY_BYTE 0xA5
+
 typedef enum {
     TASK_READY,
     TASK_RUNNING,
@@ -51,6 +57,15 @@ task_t *task_create(const char *name, task_entry_t entry, void *arg,
                      int priority, size_t stack_size, ucontext_t *return_ctx);
 
 void task_destroy(task_t *task);
+
+/* Checks the guard bytes written at both ends of the task's stack.
+ * Returns 0 (corrupted) if either has been overwritten -- almost always
+ * means the task overflowed (or, less commonly, underflowed) its stack. */
+int task_canary_ok(const task_t *task);
+
+/* Convenience for call sites that want to fail loudly and immediately
+ * rather than handle corruption -- prints which task and aborts. */
+void task_check_canary_or_abort(const task_t *task);
 
 /* Low-level primitive: saves the caller's register/stack state into `old`
  * and restores `new`'s. No scheduler bookkeeping happens here -- that's

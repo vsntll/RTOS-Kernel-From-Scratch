@@ -119,6 +119,12 @@ void scheduler_run(void) {
         block_alarm(&old_mask);
         swapcontext(&g_sched_ctx, &g_tasks[next]->context);
         restore_mask(&old_mask);
+
+        /* Every path that hands control back here -- voluntary yield,
+         * preemption, or normal termination -- passes through this one
+         * point, so checking here catches stack overflow regardless of
+         * which of those happened. */
+        task_check_canary_or_abort(g_tasks[next]);
     }
     g_current_idx = -1;
 }
