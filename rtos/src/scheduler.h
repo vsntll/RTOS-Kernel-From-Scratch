@@ -40,4 +40,12 @@ uint64_t scheduler_tick_count(void);
  * (and therefore sleep wakeups) only advance while the timer is running. */
 void task_sleep(int ms);
 
+/* Clears the scheduler's ready-queue bookkeeping (registered tasks, tick
+ * count, current-task pointer) and disables preemption if it was left
+ * running -- lets a test harness boot the kernel fresh for each test
+ * case instead of accumulating tasks across scheduler_run() calls in the
+ * same process. Does NOT task_destroy() anything; the caller still owns
+ * whatever task_t's it created. */
+void scheduler_reset(void);
+
 #endif
