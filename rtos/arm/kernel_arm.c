@@ -12,9 +12,14 @@ static uint32_t *task_sp[NUM_TASKS];
 static int current_task_idx = -1;
 
 /* Used only for the very first PendSV's "save the outgoing (nonexistent)
- * context" step -- sized to exactly one exception frame, since that's
- * all it should ever need to hold. */
-#define BOOT_SCRATCH_WORDS FRAME_WORDS
+ * context" step. Sized well past the bare 16-word exception frame: the
+ * first switch is also where a debugger/instrumented build tends to do
+ * the most incidental nested-call stack usage before settling into the
+ * steady-state per-task stacks, and this got found the hard way -- 16
+ * words was exactly the bare frame size and silently overflowed into
+ * task_sp[] (the next static right after it in .bss), corrupting
+ * task_sp[1] to 0 before it was ever read. */
+#define BOOT_SCRATCH_WORDS 64
 static uint32_t boot_scratch_stack[BOOT_SCRATCH_WORDS];
 
 static void task_return_trap(void) {
