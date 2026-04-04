@@ -2,24 +2,27 @@
 
 #include <stdint.h>
 
-/* USART2 on PA2 (TX) / PA3 (RX), AF7 -- the usual pins for ST-Link's
- * virtual COM port on an STM32F4 Discovery board, and what Renode's
- * bundled stm32f4_discovery platform wires up. Minimal polled TX only;
- * this demo never needs to receive anything. */
+/* USART1 on PA9 (TX) / PA10 (RX), AF7. Phase 8 originally used USART2 (the
+ * ST-Link virtual COM port pins on a real Discovery board); switched to
+ * USART1 for the Phase 0 QEMU port (see rtos/arm/README.md) because QEMU's
+ * `netduinoplus2` STM32F405 model wires its USART1 instance to the first
+ * `-serial` chardev (serial_hd(0)) -- there's no equivalent for picking
+ * USART2 without a second -serial argument. Minimal polled TX only; this
+ * demo never needs to receive anything. */
 
 #define RCC_BASE 0x40023800u
 #define RCC_AHB1ENR (*(volatile uint32_t *)(RCC_BASE + 0x30u))
-#define RCC_APB1ENR (*(volatile uint32_t *)(RCC_BASE + 0x40u))
+#define RCC_APB2ENR (*(volatile uint32_t *)(RCC_BASE + 0x44u))
 
 #define GPIOA_BASE 0x40020000u
 #define GPIOA_MODER (*(volatile uint32_t *)(GPIOA_BASE + 0x00u))
-#define GPIOA_AFRL (*(volatile uint32_t *)(GPIOA_BASE + 0x20u))
+#define GPIOA_AFRH (*(volatile uint32_t *)(GPIOA_BASE + 0x24u))
 
-#define USART2_BASE 0x40004400u
-#define USART2_SR (*(volatile uint32_t *)(USART2_BASE + 0x00u))
-#define USART2_DR (*(volatile uint32_t *)(USART2_BASE + 0x04u))
-#define USART2_BRR (*(volatile uint32_t *)(USART2_BASE + 0x08u))
-#define USART2_CR1 (*(volatile uint32_t *)(USART2_BASE + 0x0Cu))
+#define USART1_BASE 0x40011000u
+#define USART1_SR (*(volatile uint32_t *)(USART1_BASE + 0x00u))
+#define USART1_DR (*(volatile uint32_t *)(USART1_BASE + 0x04u))
+#define USART1_BRR (*(volatile uint32_t *)(USART1_BASE + 0x08u))
+#define USART1_CR1 (*(volatile uint32_t *)(USART1_BASE + 0x0Cu))
 
 #define USART_SR_TXE (1u << 7)
 #define USART_CR1_TE (1u << 3)
@@ -27,24 +30,32 @@
 
 void uart_init(void) {
     RCC_AHB1ENR |= (1u << 0);  /* GPIOA clock */
-    RCC_APB1ENR |= (1u << 17); /* USART2 clock */
+    RCC_APB2ENR |= (1u << 4);  /* USART1 clock */
 
-    /* PA2/PA3 -> alternate function mode */
-    GPIOA_MODER &= ~((3u << (2 * 2)) | (3u << (2 * 3)));
-    GPIOA_MODER |= (2u << (2 * 2)) | (2u << (2 * 3));
+    /* PA9/PA10 -> alternate function mode. Pins 8-15 live in AFRH, not
+     * AFRL (which only covers pins 0-7) -- the USART2 version of this code
+     * used AFRL/pins 2-3 and doesn't translate directly. */
+    GPIOA_MODER &= ~((3u << (2 * 9)) | (3u << (2 * 10)));
+    GPIOA_MODER |= (2u << (2 * 9)) | (2u << (2 * 10));
 
-    /* AF7 = USART2 on both pins */
-    GPIOA_AFRL &= ~((0xFu << (4 * 2)) | (0xFu << (4 * 3)));
-    GPIOA_AFRL |= (7u << (4 * 2)) | (7u << (4 * 3));
+    /* AF7 = USART1 on both pins. AFRH bit position for pin N is
+     * 4*(N-8). */
+    GPIOA_AFRH &= ~((0xFu << (4 * (9 - 8))) | (0xFu << (4 * (10 - 8))));
+    GPIOA_AFRH |= (7u << (4 * (9 - 8))) | (7u << (4 * (10 - 8)));
 
-    USART2_BRR = 0x0683; /* ~9600 baud @ 16MHz APB1 -- not timing-critical here */
-    USART2_CR1 = USART_CR1_UE | USART_CR1_TE;
+    /* Baud isn't timing-critical for this demo (neither emulator's chardev
+     * backend enforces real bit timing), and USART1 is on APB2 rather than
+     * APB1 -- this BRR value is carried over unverified pending an actual
+     * QEMU run; a wrong BRR still transmits complete bytes to the chardev,
+     * it just wouldn't matter on real silicon either way here. */
+    USART1_BRR = 0x0683;
+    USART1_CR1 = USART_CR1_UE | USART_CR1_TE;
 }
 
 void uart_putc(char c) {
-    while (!(USART2_SR & USART_SR_TXE)) {
+    while (!(USART1_SR & USART_SR_TXE)) {
     }
-    USART2_DR = (uint32_t)(unsigned char)c;
+    USART1_DR = (uint32_t)(unsigned char)c;
 }
 
 void uart_puts(const char *s) {
