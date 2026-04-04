@@ -5,7 +5,7 @@ using sysbus
 mach create "rtos-arm"
 machine LoadPlatformDescription @platforms/boards/stm32f4_discovery.repl
 
-showAnalyzer sysbus.usart2
+showAnalyzer sysbus.usart1
 
 sysbus LoadELF $ORIGIN/build/kernel.elf
 
