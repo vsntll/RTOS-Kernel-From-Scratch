@@ -44,6 +44,12 @@ Two bugs surfaced only on real hardware semantics, not host-native:
   invisible until the second switch actually dereferenced the clobbered
   pointer. Fixed by giving it real headroom (64 words) rather than sizing
   it to the theoretical minimum.
+- **QEMU became the primary emulation target (still Phase 8's demo).**
+  `arm/uart.c` moved from USART2 to USART1 so the same firmware boots
+  identically under both QEMU's `netduinoplus2` machine and Renode's
+  `stm32f4_discovery` platform -- see the "Why USART1, not USART2" note in
+  `arm/README.md`. This landed as groundwork for the ROS2 client layer
+  (`xrce/docs/design.md`), which needs a real host-facing serial link.
 - **An unrelated-looking main() edit reintroduced a hang under Renode.**
   Renaming a helper function and dropping a diagnostic UART print — pure
   refactoring, no logic change — brought back a `PendSV`/`SysTick`
