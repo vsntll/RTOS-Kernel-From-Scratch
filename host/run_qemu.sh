@@ -17,9 +17,14 @@ if [ ! -f "$ELF" ]; then
     exit 1
 fi
 
-SERIAL_TARGET="stdio"
 if [ "${1:-}" = "pty" ]; then
-    SERIAL_TARGET="pty"
+    # -serial pty hands the UART to its own backend, separate from
+    # -nographic's monitor-on-stdio -- QEMU prints the allocated pty path
+    # (e.g. /dev/pts/N) to stderr on startup.
+    qemu-system-arm -M netduinoplus2 -nographic -kernel "$ELF" -serial pty
+else
+    # No explicit -serial here: -nographic already multiplexes the UART
+    # onto this terminal's stdio. Passing -serial stdio on top of that is
+    # the same backend attached twice and QEMU refuses to start.
+    qemu-system-arm -M netduinoplus2 -nographic -kernel "$ELF"
 fi
-
-qemu-system-arm -M netduinoplus2 -nographic -kernel "$ELF" -serial "$SERIAL_TARGET"
