@@ -42,9 +42,14 @@ bool xrce_cdr_write_header(xrce_cdr_writer_t *w);
 
 bool xrce_cdr_write_bool(xrce_cdr_writer_t *w, bool v);
 bool xrce_cdr_write_u8(xrce_cdr_writer_t *w, uint8_t v);
+bool xrce_cdr_write_i16(xrce_cdr_writer_t *w, int16_t v);
 bool xrce_cdr_write_i32(xrce_cdr_writer_t *w, int32_t v);
 bool xrce_cdr_write_u32(xrce_cdr_writer_t *w, uint32_t v);
 bool xrce_cdr_write_f64(xrce_cdr_writer_t *w, double v);
+/* Raw byte copy, no alignment beyond 1 -- matches CDR's array_uint8_t
+ * semantics (what the XRCE spec uses for fields like ObjectId/RequestId/
+ * ClientKey: fixed-size byte arrays with no further internal structure). */
+bool xrce_cdr_write_bytes(xrce_cdr_writer_t *w, const uint8_t *data, size_t len);
 /* CDR string: uint32 length (byte count INCLUDING the null terminator),
  * then that many bytes (including the terminator). `s` must be a normal
  * C string. */
@@ -58,9 +63,11 @@ bool xrce_cdr_read_header(xrce_cdr_reader_t *r);
 
 bool xrce_cdr_read_bool(xrce_cdr_reader_t *r, bool *out);
 bool xrce_cdr_read_u8(xrce_cdr_reader_t *r, uint8_t *out);
+bool xrce_cdr_read_i16(xrce_cdr_reader_t *r, int16_t *out);
 bool xrce_cdr_read_i32(xrce_cdr_reader_t *r, int32_t *out);
 bool xrce_cdr_read_u32(xrce_cdr_reader_t *r, uint32_t *out);
 bool xrce_cdr_read_f64(xrce_cdr_reader_t *r, double *out);
+bool xrce_cdr_read_bytes(xrce_cdr_reader_t *r, uint8_t *out, size_t len);
 /* Writes up to out_cap-1 bytes into `out` and NUL-terminates; fails if the
  * encoded string (including its terminator) doesn't fit `out_cap`, rather
  * than silently truncating a real payload. */
