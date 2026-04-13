@@ -64,6 +64,26 @@ bool xrce_cdr_write_u8(xrce_cdr_writer_t *w, uint8_t v) {
     return true;
 }
 
+bool xrce_cdr_write_i16(xrce_cdr_writer_t *w, int16_t v) {
+    uint16_t u = (uint16_t)v;
+    align_writer(w, 2);
+    if (!ensure(w->cap, w->pos, 2)) {
+        return false;
+    }
+    w->buf[w->pos++] = (uint8_t)(u & 0xFF);
+    w->buf[w->pos++] = (uint8_t)((u >> 8) & 0xFF);
+    return true;
+}
+
+bool xrce_cdr_write_bytes(xrce_cdr_writer_t *w, const uint8_t *data, size_t len) {
+    if (!ensure(w->cap, w->pos, len)) {
+        return false;
+    }
+    memcpy(&w->buf[w->pos], data, len);
+    w->pos += len;
+    return true;
+}
+
 bool xrce_cdr_write_i32(xrce_cdr_writer_t *w, int32_t v) {
     return xrce_cdr_write_u32(w, (uint32_t)v);
 }
@@ -137,6 +157,25 @@ bool xrce_cdr_read_u8(xrce_cdr_reader_t *r, uint8_t *out) {
         return false;
     }
     *out = r->buf[r->pos++];
+    return true;
+}
+
+bool xrce_cdr_read_i16(xrce_cdr_reader_t *r, int16_t *out) {
+    if (!align_reader(r, 2) || !ensure(r->len, r->pos, 2)) {
+        return false;
+    }
+    uint16_t v = (uint16_t)(r->buf[r->pos] | ((uint16_t)r->buf[r->pos + 1] << 8));
+    r->pos += 2;
+    *out = (int16_t)v;
+    return true;
+}
+
+bool xrce_cdr_read_bytes(xrce_cdr_reader_t *r, uint8_t *out, size_t len) {
+    if (!ensure(r->len, r->pos, len)) {
+        return false;
+    }
+    memcpy(out, &r->buf[r->pos], len);
+    r->pos += len;
     return true;
 }
 
