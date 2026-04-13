@@ -12,8 +12,13 @@ the ROS2 project plan) since the follow-on ROS2 client layer needs a real
 serial link out to a host process, and `-serial` is QEMU's standard way to
 do that. The firmware itself didn't need to change to move emulators, only
 which UART peripheral it drives -- see the USART1-vs-USART2 note below.
-Renode still boots the same ELF; its instructions are kept below as a
-secondary path, not actively re-verified after the USART1 switch.
+Verified booting under `qemu-system-arm 8.2.2` (`-M netduinoplus2`):
+identical `[task A]`/`[task B]` alternating output to the prior Renode
+demo. Renode still boots the same ELF in principle; its instructions are
+kept below as a secondary path, not re-verified after the USART1 switch
+(no regression is expected -- Renode's `stm32f4_discovery` platform models
+the same USART1 register layout -- but "should work" isn't "verified
+working," so this is stated as what it is).
 
 ## Building
 
@@ -40,7 +45,9 @@ bash ../../host/run_qemu.sh pty      # UART on a pty, for the ROS2-layer
 ```
 
 Prints `[task A] tick` / `[task B] tick` alternating every SysTick period,
-same as the Renode output below.
+same as the Renode output below (`-nographic` alone, without an explicit
+`-serial stdio`, is what actually works -- QEMU errors out if you pass
+both, since `-nographic` already multiplexes the UART onto stdio).
 
 ## Running in Renode (secondary)
 
