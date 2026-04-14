@@ -26,6 +26,18 @@ host-native-testable via its own `Makefile` (same `src/`+`tests/` pattern as
 against the ARM kernel lives in `rtos/arm/`. Host-side agent/bridge tooling
 lives in `host/`.
 
+## Phase 0 — Environment + QEMU port
+
+WSL toolchain (`host/setup_wsl.sh`): `qemu-system-arm`, `arm-none-eabi-gcc`,
+ROS2 Jazzy desktop, and eProsima's `Micro-XRCE-DDS-Agent` built from source
+(the exact same binary this project's interop claims are checked against --
+nothing agent-side is modified or reimplemented). `rtos/arm/` moved from
+Renode-only to QEMU-primary (`netduinoplus2`, USART1) -- see
+`rtos/arm/README.md` for the emulator-specific details; that's the ARM
+kernel port, not this layer, so it's documented there instead of duplicated
+here. Status: verified -- the existing two-task demo boots identically
+under `qemu-system-arm 8.2.2`.
+
 ## Phase 1 — Transport foundation (serial framing)
 
 `serial_transport.c/h` reimplements eProsima's "Serial Transport" framing
@@ -67,13 +79,101 @@ byte rather than wedging -- covered by
 `case_resync_after_truncated_frame` in the test suite.
 
 Status: implemented and unit-tested host-natively (`xrce/tests`, run via
-`make test`, clean under `-fsanitize=address,undefined`). Not yet wired
-into a QEMU firmware image or exercised against a real UART -- that lands
-with the Phase 0 QEMU port and the Phase 1 end-to-end deliverable (RTOS
-task in QEMU exchanging framed packets with a host peer).
+`make test`, clean under `-fsanitize=address,undefined`) and cross-compiles
+cleanly for the Cortex-M4 target. Not yet wired into the QEMU firmware
+image itself -- Phase 4's live-agent proof below went over UDP (agent and
+protocol layers are transport-agnostic; the serial framing wraps the exact
+same message bytes) rather than through the ARM firmware's UART, so
+"framing survives a real UART" and "protocol bytes are accepted by the
+real agent" have each been verified independently, but not yet as one
+continuous QEMU-to-agent path. That wiring (an RTOS task calling this
+layer, over `rtos/arm/uart.c`, into the agent listening on the QEMU
+`-serial pty` device) is the natural next step, not yet done.
+
+## Phase 2 — CDR serialization
+
+`cdr.c/h`: alignment-aware CDR reader/writer (primitives aligned to their
+own size, measured from the start of the buffer -- matches Fast-CDR's
+behavior, which is what a real ROS2 participant actually runs). `msgs.c/h`:
+field-exact layouts for `std_msgs/Int32`, `std_msgs/String`, and
+`sensor_msgs/Imu` (the last one specifically to exercise nested
+structs/mixed alignment: int32/uint32 header fields next to float64
+vectors and 9-element covariance arrays). Status: unit-tested including a
+byte-exact alignment case (not just round-trips, which can pass against a
+self-consistent but wrong implementation) and cross-compiles for Cortex-M4.
+
+## Phase 3 — Client library (session / entity creation / WRITE_DATA)
+
+`session.h/c`: message header, submessage header (with backpatched
+length -- simpler and less error-prone than the reference client's
+precomputed-size approach, and produces identical bytes since CDR
+alignment is a deterministic function of field sequence and starting
+offset either way), CREATE_CLIENT handshake, CREATE for
+participant/topic/publisher/datawriter via XML representation, and
+WRITE_DATA. Deliberately out of scope: reliable streams
+(heartbeat/acknack), subscriptions/READ_DATA, services -- see
+`session.h`'s header comment.
+
+Ground-truthed against `src/c/core/session/session_info.c`,
+`src/c/core/serialization/xrce_types.c`, and `src/c/core/session/stream/stream_id.c`
+in the reference client for: message-header layout (session_id/stream_id/
+seq_num/[client_key]), the CREATE_CLIENT handshake's special-cased header
+(session_id forced to 0x00, stream 0, seq 0 -- the target session doesn't
+exist yet), ObjectId's 2-byte bit-packing (12-bit id + 4-bit kind, NOT a
+CDR primitive), RequestId's big-endian byte order (the one field in the
+whole protocol that isn't little-endian), and best-effort output stream
+raw IDs (0 = none/handshake, 1 = best-effort index 0). `test_session.c`
+hand-computes the full expected byte sequence for CREATE_CLIENT rather than
+just round-tripping it.
+
+Status: unit-tested (byte-exact for CREATE_CLIENT, full field-decode for
+CREATE/WRITE_DATA) and cross-compiles for Cortex-M4.
+
+## Phase 4 — Host-side bridge (real agent) -- partial
+
+`host/live_agent_check.c` and `host/live_publish_demo.c` are manual,
+one-off programs (BSD sockets, not portable/embeddable, not part of
+`make test`) that run this project's session layer against a real,
+unmodified `MicroXRCEAgent` over UDP -- the actual point of choosing
+Option A: proof against an agent neither of us wrote, not just against our
+own reader.
+
+**Verified working, with the agent's own log as evidence, not just this
+project's opinion of itself:**
+- CREATE_CLIENT: agent logs `create_client` / `session established` for a
+  hand-built client key.
+- CREATE participant/topic/publisher/datawriter (XML representation):
+  agent logs `participant created`, `topic created`, `publisher created`,
+  `datawriter created`, each with matching object ids.
+- WRITE_DATA reaches the DDS/RTPS layer: `ros2 topic echo /chatter` (real,
+  unmodified ROS2 CLI) shows its RTPS reader actively attempting to
+  process each published sample -- the message gets all the way from this
+  project's hand-rolled client, through the real agent, into real DDS.
+
+**Known gap, not yet resolved:** the RTPS reader rejects the sample with
+`Change payload size of '12' bytes is larger than the history payload size
+of '11' bytes and cannot be resized`. The topic was created with only a
+bare type-name string (`dataType=std_msgs::msg::dds_::Int32_`), not real
+type introspection/a TypeObject -- so Fast-DDS's dynamic participant is
+guessing the sample size from the name alone rather than knowing the
+actual `std_msgs/Int32` layout, and guessed wrong. Real micro-ROS/rclc
+clients carry actual generated typesupport metadata alongside the topic
+declaration, not just a name string; reproducing that (or finding the
+right XRCE-level type-registration path, e.g. an `OBJK_TYPE` entity or a
+`REF`-based topic pointing at a profile the agent has real type info for)
+is the next concrete step, not yet done.
+
+Both files' XML entity-representation strings (the `<dds>...</dds>`
+wrapper, element-not-attribute children) are ground-truthed against
+`Micro-XRCE-DDS-Client/examples/PublishHelloWorld/main.c` -- an earlier
+attempt using an attribute-style shorthand (`<dds_topic name="..."
+.../>`) failed the agent's XML parser outright (`Not found root tag`),
+which is exactly the kind of interop detail this project exists to get
+right rather than guess at.
 
 ## Later phases
 
-Not started yet. Tracked at a high level in the top-level project plan;
-this file gets a new dated section per phase as it actually lands, same
-convention as `rtos/docs/design.md`.
+Not started (subscriptions/READ_DATA, services, bidirectional demo,
+multi-node, latency/fault-handling writeup). Tracked at a high level in the
+top-level project plan; this file gets a new dated section per phase as it
+actually lands, same convention as `rtos/docs/design.md`.
