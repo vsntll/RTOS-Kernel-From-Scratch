@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>RTOS Kernel From Scratch</title>
-<meta name="description" content="A preemptive, priority-based RTOS kernel written in C from first principles — scheduler, context switch, priority-inheriting mutex, and a real Cortex-M4 port." />
+<meta name="description" content="A preemptive, priority-based RTOS kernel written in C from first principles — scheduler, context switch, priority-inheriting mutex, a real Cortex-M4 port, and a Micro XRCE-DDS client layer that interoperates with a real, unmodified ROS2 agent." />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2312161f'/%3E%3Crect x='6' y='14' width='6' height='6' fill='%23dc9a3f'/%3E%3Crect x='14' y='8' width='6' height='6' fill='%235fada3'/%3E%3Crect x='22' y='18' width='4' height='4' fill='%23dc9a3f'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -442,6 +442,7 @@
       <a href="#roadmap">roadmap</a>
       <a href="#api">api</a>
       <a href="#validation">validation</a>
+      <a href="#ros2">ros2 layer</a>
       <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme">MODE: AUTO</button>
     </nav>
   </div>
@@ -456,12 +457,14 @@
     task structs and stacks, cooperative and preemptive scheduling, priority inversion and the
     fix for it, and blocking synchronization primitives — built up in eight testable phases,
     running host-native on <code>ucontext.h</code> and, in Phase 8, on real Cortex-M4 assembly
-    under Renode.
+    under QEMU. On top of that port, a Micro XRCE-DDS client layer lets RTOS tasks publish into
+    a real ROS2 graph through a real, unmodified agent — <a href="#ros2">see below</a>.
   </p>
   <div class="cta-row">
     <a class="btn primary" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch">View source →</a>
     <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/docs/design.md">Read the design doc</a>
     <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/arm/README.md">Cortex-M4 port ↗</a>
+    <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/xrce/docs/design.md">ROS2 client layer ↗</a>
   </div>
 
   <div class="scope" aria-hidden="true">
@@ -536,7 +539,7 @@
                               <span class="warm">SIGALRM</span> <span class="dim">(tick) forces preemption</span></div>
 
     <h3 style="margin-top:36px;">Two build targets, one design</h3>
-    <p style="margin-bottom:0;">The context-switch code is also ported to real Cortex-M4 assembly and boots under Renode (<code>rtos/arm/</code>) — deliberately a small proof that the design ports to real hardware, not a re-implementation of Phases 2–7 on top of it.</p>
+    <p style="margin-bottom:0;">The context-switch code is also ported to real Cortex-M4 assembly and boots under QEMU (primary) and Renode (<code>rtos/arm/</code>) — deliberately a small proof that the design ports to real hardware, not a re-implementation of Phases 2–7 on top of it.</p>
     <div class="grid-2">
       <div>
         <div class="col-head">Host-native — src/</div>
@@ -553,7 +556,7 @@
           <li>Context switch via <code>PendSV_Handler</code> (<code>context_switch.s</code>)</li>
           <li>Tick source: real <code>SysTick</code></li>
           <li>Stack: fixed array + hand-built exception frame (<code>kernel_arm.c</code>)</li>
-          <li>Round robin only — a minimal 2-task demo, boots under Renode</li>
+          <li>Round robin only — a minimal 2-task demo, boots under QEMU/Renode</li>
         </ul>
       </div>
     </div>
@@ -671,6 +674,55 @@ make examples
   </div>
 </section>
 
+<section id="ros2">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§9</span><h2>ROS2 client layer — Micro XRCE-DDS (Option A)</h2></div>
+    <p class="lede">
+      On top of the Cortex-M4 port, <code>xrce/</code> implements enough of the real
+      <strong>Micro XRCE-DDS Client protocol</strong> — the same wire protocol actual micro-ROS
+      boards speak over their debug UART — to interoperate with a real, unmodified
+      <code>MicroXRCEAgent</code> binary and publish into a real ROS2 graph. Not a custom
+      protocol reimplemented from imagination: every wire-format detail below is checked
+      against eProsima's reference client <em>source</em>, and verified against the actual
+      agent, logs included.
+    </p>
+
+    <h3 style="margin-top:30px;">What's implemented</h3>
+    <ul class="phases">
+      <li class="phase"><span class="n">P0</span><span class="t">Toolchain + QEMU port</span><span class="d">qemu-system-arm, ROS2 Jazzy, agent built from source</span></li>
+      <li class="phase"><span class="n">P1</span><span class="t">Serial transport framing</span><span class="d">byte-stuffed, CRC-16/ARC — unit-tested</span></li>
+      <li class="phase"><span class="n">P2</span><span class="t">CDR serialization</span><span class="d">Int32 / String / Imu, alignment-aware — unit-tested</span></li>
+      <li class="phase"><span class="n">P3</span><span class="t">Session + entity creation + WRITE_DATA</span><span class="d">CREATE_CLIENT, CREATE, WRITE_DATA — unit-tested</span></li>
+      <li class="phase stretch"><span class="n">P4</span><span class="t">Host-side bridge — partial</span><span class="d">verified live against a real agent, one known gap remains</span></li>
+    </ul>
+
+    <h3 style="margin-top:30px;">Verified against a real agent, not just its own tests</h3>
+    <div class="notes" style="margin-top:16px;">
+      <div class="note">
+        <div class="tag">Docs vs. source: a real discrepancy</div>
+        <p>eProsima's published transport docs describe the serial framing's CRC as covering the whole frame, RFC 1662-style. The actual reference client only ever CRCs the payload. Implementing this from the docs would have produced a CRC that silently never matches the real agent's — caught by reading the reference <em>source</em>, not the prose summary.</p>
+      </div>
+      <div class="note">
+        <div class="tag">The real agent's own logs</div>
+        <p>Running this project's hand-built CREATE_CLIENT / CREATE / WRITE_DATA messages against an unmodified <code>MicroXRCEAgent</code>: its logs show <code>session established</code>, then <code>participant created</code>, <code>topic created</code>, <code>publisher created</code>, <code>datawriter created</code> — each from bytes this project constructed, not eProsima's client.</p>
+      </div>
+      <div class="note">
+        <div class="tag">Known gap, stated plainly</div>
+        <p><code>ros2 topic echo</code>'s RTPS reader actively receives each published sample but rejects it on a payload-size mismatch — the topic was declared with a bare type-name string instead of real type introspection. The fix (real typesupport metadata or an XRCE-level type-registration path) is scoped and not yet done; see <code>xrce/docs/design.md</code>.</p>
+      </div>
+    </div>
+
+    <h3 style="margin-top:30px;">Try it</h3>
+    <pre class="mono">cd xrce &amp;&amp; make test          <span class="dim"># host-native unit tests, no agent needed</span>
+
+<span class="dim"># against a real agent (after host/setup_wsl.sh):</span>
+MicroXRCEAgent udp4 -p 8888 &amp;
+gcc -Ixrce/include host/live_publish_demo.c xrce/build/libxrce.a -o /tmp/demo
+/tmp/demo 127.0.0.1 8888
+<span class="dim"># separately: ros2 topic echo /chatter</span></pre>
+  </div>
+</section>
+
 <footer>
   <div class="wrap">
     <div class="links">
@@ -678,8 +730,9 @@ make examples
       <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/README.md">Full README</a>
       <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/docs/design.md">design.md</a>
       <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/arm/README.md">arm/README.md</a>
+      <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/xrce/docs/design.md">xrce/design.md</a>
     </div>
-    <div>rtos-kernel-from-scratch · C · host-native + Cortex-M4</div>
+    <div>rtos-kernel-from-scratch · C · host-native + Cortex-M4 + Micro XRCE-DDS</div>
   </div>
 </footer>
 
