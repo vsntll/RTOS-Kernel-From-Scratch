@@ -11,11 +11,19 @@ timer (`setitimer` + `SIGALRM`) stands in for a hardware tick interrupt
 Cortex-M part).
 
 The context-switch code is also ported to real Cortex-M4 assembly and
-boots under Renode (`rtos/arm/`) — a `PendSV_Handler` doing manual
+boots under QEMU and Renode (`rtos/arm/`) — a `PendSV_Handler` doing manual
 register save/restore and a real `SysTick` ISR driving preemption,
 instead of `ucontext.h`/`SIGALRM`. See `rtos/arm/README.md` for details.
 Everything else in this repo is host-native and needs no board, simulator,
 or cross-compiler.
+
+On top of that ARM port, `xrce/` implements enough of the real **Micro
+XRCE-DDS Client protocol** — the same wire protocol actual micro-ROS boards
+speak over their debug UART — for this RTOS to interoperate with a real,
+unmodified `MicroXRCEAgent` and publish into a real ROS2 graph. See
+[ROS2 client layer](#ros2-client-layer-micro-xrce-dds-option-a) below for
+what's implemented, what's verified against the live agent, and what isn't
+done yet.
 
 ## Why it exists
 
@@ -39,7 +47,8 @@ main() --> scheduler_run() --> [Task A] <--context_switch--> [Task B] <--> [Task
 |------|-------|
 | `gcc` | Makefile invokes `gcc` directly. Needs POSIX (`ucontext.h`, `setitimer`) — Linux or WSL. Developed and tested under WSL (Ubuntu); not tested on macOS, where `ucontext.h` is present but deprecated. |
 | `make` | Builds the kernel, tests, and examples. |
-| `arm-none-eabi-gcc` + [Renode](https://renode.io/) | Only for the Phase 8 Cortex-M port (`rtos/arm/`) — not needed for anything else in this repo. |
+| `arm-none-eabi-gcc` + `qemu-system-arm` (or [Renode](https://renode.io/)) | Only for the Phase 8 Cortex-M port (`rtos/arm/`) — not needed for anything else in this repo. |
+| ROS2 Jazzy + a from-source `Micro-XRCE-DDS-Agent` build | Only for the `xrce/` ROS2 client layer's live-agent tests (`host/live_*.c`) — not needed to build/test `rtos/` or `xrce/`'s own unit tests. `host/setup_wsl.sh` installs all of the above (including `qemu-system-arm`/`arm-none-eabi-gcc`) in one script. |
 
 AddressSanitizer/UndefinedBehaviorSanitizer (`-fsanitize=address,undefined`,
 bundled with GCC — just pass `SANITIZE=address,undefined`) is what this
@@ -168,6 +177,55 @@ Renode's own log instead of a window. See `rtos/arm/README.md` for what's
 different from the host-native kernel, and `docs/design.md` for two bugs
 that only showed up under real hardware exception semantics.
 
+## ROS2 client layer (Micro XRCE-DDS, Option A)
+
+`xrce/` is portable, OS-independent C — no RTOS dependency, host-native
+testable via its own `Makefile`, same `src/`+`tests/` pattern as `rtos/`:
+
+```bash
+cd xrce
+make clean
+make test          # or: make SANITIZE=address,undefined test
+```
+
+What it implements, ground-truthed against eProsima's actual reference
+client source (not just its docs — see `xrce/docs/design.md` for a case
+where the two disagree):
+
+- **Serial transport framing** — the same byte-stuffed, CRC-16/ARC-checked
+  framing a real micro-ROS board speaks over UART.
+- **CDR serialization** — alignment-aware, for `std_msgs/Int32`,
+  `std_msgs/String`, `sensor_msgs/Imu`.
+- **Session / entity creation / WRITE_DATA** — CREATE_CLIENT handshake,
+  CREATE (participant/topic/publisher/datawriter via XML representation),
+  WRITE_DATA.
+
+All three are unit-tested (including byte-exact checks against
+hand-computed expected wire bytes, not just round-trips) and cross-compile
+cleanly for the Cortex-M4 target.
+
+**Verified against a real, unmodified agent** (`host/live_agent_check.c`,
+`host/live_publish_demo.c` — manual one-off programs, not part of
+`make test`, since they need a live external agent process):
+
+```bash
+# in WSL, after host/setup_wsl.sh:
+MicroXRCEAgent udp4 -p 8888 &
+gcc -Ixrce/include host/live_publish_demo.c xrce/build/libxrce.a -o /tmp/demo
+/tmp/demo 127.0.0.1 8888
+# separately: ros2 topic echo /chatter
+```
+
+The agent's own logs confirm session establishment and participant/topic/
+publisher/datawriter creation from this project's hand-built protocol
+messages, and `ros2 topic echo`'s RTPS reader actively receives each
+published sample. **Not yet resolved:** the reader rejects the sample on a
+payload-size mismatch, because the topic was declared with a bare type-name
+string instead of real type introspection — see `xrce/docs/design.md`'s
+Phase 4 section for the specific error and the likely fix. Also not yet
+done: wiring this through the QEMU-side UART (Phase 4 above went over UDP,
+not the serial framing) and subscriptions/services (later phases).
+
 ## Project structure
 
 ```
@@ -191,8 +249,20 @@ rtos/
     priority_inversion_demo.c
   docs/
     design.md              # architecture + internals writeup, including Phase 8 notes
-  arm/                      # Phase 8: Cortex-M4 port, boots under Renode (own README/Makefile)
+  arm/                      # Phase 8: Cortex-M4 port, boots under QEMU/Renode (own README/Makefile)
   Makefile
+
+xrce/                       # Micro XRCE-DDS client layer (Option A), portable/OS-independent
+  include/xrce/              # serial_transport.h, cdr.h, msgs.h, session.h
+  src/                        # matching .c implementations
+  tests/                      # host-native unit tests, own Makefile (same pattern as rtos/)
+  docs/design.md              # ground truth notes, phase-by-phase status
+
+host/                        # host-side scripts and live-agent test programs
+  setup_wsl.sh                # installs qemu-system-arm, arm-none-eabi-gcc, ROS2 Jazzy, the agent
+  run_qemu.sh                 # boots rtos/arm/build/kernel.elf under QEMU
+  live_agent_check.c          # manual: CREATE_CLIENT against a real MicroXRCEAgent
+  live_publish_demo.c         # manual: full entity-creation + publish loop against a real agent
 ```
 
 ## Kernel API (summary)
@@ -226,7 +296,21 @@ milestone rather than a big-bang implementation:
 - [x] Phase 5 — Synchronization primitives (mutex, semaphore, queue)
 - [x] Phase 6 — Timing and delays (`task_sleep`)
 - [x] Phase 7 — Testing and hardening (fuzzing, stack canaries)
-- [x] Phase 8 (stretch) — Cortex-M4 port, boots under Renode
+- [x] Phase 8 (stretch) — Cortex-M4 port, boots under QEMU (primary) and Renode
+
+**ROS2 client layer (`xrce/`), tracked separately since it's a layer on
+top of the kernel above, not part of it:**
+
+- [x] Phase 0 — WSL toolchain (`qemu-system-arm`, ROS2 Jazzy, agent build); ARM port moved to QEMU-primary
+- [x] Phase 1 — Serial transport framing, unit-tested
+- [x] Phase 2 — CDR serialization (Int32/String/Imu), unit-tested
+- [x] Phase 3 — Session/entity-creation/WRITE_DATA, unit-tested
+- [~] Phase 4 — Host-side bridge: verified against a real agent over UDP
+      (session + all four entity types + WRITE_DATA reaching the RTPS
+      reader); type-registration payload-size mismatch and QEMU-UART
+      wiring not yet resolved
+- [ ] Phase 5 — Bidirectional (subscriptions, services) + realistic demo
+- [ ] Phase 6 — Latency/throughput measurement, fault handling, polish
 
 ## Troubleshooting
 
