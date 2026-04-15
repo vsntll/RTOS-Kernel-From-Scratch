@@ -220,11 +220,16 @@ The agent's own logs confirm session establishment and participant/topic/
 publisher/datawriter creation from this project's hand-built protocol
 messages, and `ros2 topic echo`'s RTPS reader actively receives each
 published sample. **Not yet resolved:** the reader rejects the sample on a
-payload-size mismatch, because the topic was declared with a bare type-name
-string instead of real type introspection — see `xrce/docs/design.md`'s
-Phase 4 section for the specific error and the likely fix. Also not yet
-done: wiring this through the QEMU-side UART (Phase 4 above went over UDP,
-not the serial framing) and subscriptions/services (later phases).
+payload-size mismatch (reproduces under both agent middleware modes).
+Checked directly against the agent's own verbose log — it extracts and
+forwards this project's bytes to Fast-DDS byte-exact, unmodified — so the
+client/agent boundary is now confirmed correct and the mismatch is isolated
+to Fast-DDS's own reader-side type-size accounting, most likely because the
+topic was declared with a bare type-name string instead of real type
+introspection. See `xrce/docs/design.md`'s Phase 4 section for the exact
+evidence and the next step. Also not yet done: wiring this through the
+QEMU-side UART (Phase 4 above went over UDP, not the serial framing) and
+subscriptions/services (later phases).
 
 ## Project structure
 
