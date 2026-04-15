@@ -150,18 +150,35 @@ project's opinion of itself:**
   process each published sample -- the message gets all the way from this
   project's hand-rolled client, through the real agent, into real DDS.
 
-**Known gap, not yet resolved:** the RTPS reader rejects the sample with
-`Change payload size of '12' bytes is larger than the history payload size
-of '11' bytes and cannot be resized`. The topic was created with only a
-bare type-name string (`dataType=std_msgs::msg::dds_::Int32_`), not real
-type introspection/a TypeObject -- so Fast-DDS's dynamic participant is
-guessing the sample size from the name alone rather than knowing the
-actual `std_msgs/Int32` layout, and guessed wrong. Real micro-ROS/rclc
-clients carry actual generated typesupport metadata alongside the topic
-declaration, not just a name string; reproducing that (or finding the
-right XRCE-level type-registration path, e.g. an `OBJK_TYPE` entity or a
-`REF`-based topic pointing at a profile the agent has real type info for)
-is the next concrete step, not yet done.
+**Known gap, narrowed but not yet resolved:** the RTPS reader rejects the
+sample with `Change payload size of '12' bytes is larger than the history
+payload size of '11' bytes and cannot be resized`. This reproduces
+identically under both `-m dds` and `-m rtps` agent middleware modes, which
+rules out one initial theory (dynamic-type creation quirks specific to one
+middleware backend).
+
+Checked directly against the agent's own verbose (`-v 6`) log rather than
+guessed: `DataWriter.cpp`'s `[** <<DDS>> **]` line shows the agent extracts
+*exactly* this project's 8-byte CDR-encoded sample (`00 01 00 00 <int32 LE>`,
+`len: 8`) from the WRITE_DATA submessage and hands it to
+`middleware.write_data()` -- i.e., `Processor::process_write_data_submessage`
+and `DataWriter::write()` (both read from the agent's own source,
+`src/cpp/processor/Processor.cpp` / `src/cpp/datawriter/DataWriter.cpp`)
+strip the `BaseObjectRequest` header correctly and forward this project's
+bytes unmodified. So the client and agent sides of the boundary are now
+verified byte-exact; the "12 vs 11" mismatch is happening downstream of
+that, inside Fast-DDS's own RTPS reader-side history/type-size accounting
+(likely related to the topic being declared with a bare type-name string
+rather than real type introspection/a TypeObject, but not confirmed to
+that level of certainty the way the client/agent boundary now is).
+
+Next concrete step: either give the agent real type introspection for
+`std_msgs/Int32` (an `OBJK_TYPE` entity, or a `REF`-based topic pointing at
+a profile with real type info, rather than a bare XML name string), or
+trace further into Fast-DDS's dynamic-type size inference directly. Not
+done in this pass -- called out explicitly rather than left implicit,
+since "the agent accepts our messages" and "the full pipe decodes cleanly
+end to end" are different claims and only the first is fully nailed down.
 
 Both files' XML entity-representation strings (the `<dds>...</dds>`
 wrapper, element-not-attribute children) are ground-truthed against
