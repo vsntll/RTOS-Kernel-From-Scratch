@@ -129,7 +129,7 @@ just round-tripping it.
 Status: unit-tested (byte-exact for CREATE_CLIENT, full field-decode for
 CREATE/WRITE_DATA) and cross-compiles for Cortex-M4.
 
-## Phase 4 — Host-side bridge (real agent) -- partial
+## Phase 4 — Host-side bridge (real agent) -- transport verified, one gap remains
 
 `host/live_agent_check.c` and `host/live_publish_demo.c` are manual,
 one-off programs (BSD sockets, not portable/embeddable, not part of
@@ -137,6 +137,51 @@ one-off programs (BSD sockets, not portable/embeddable, not part of
 unmodified `MicroXRCEAgent` over UDP -- the actual point of choosing
 Option A: proof against an agent neither of us wrote, not just against our
 own reader.
+
+**Also verified over the real serial transport, from real QEMU-booted ARM
+firmware** -- not just UDP from a host process. `rtos/arm/ros2_demo.c` (a
+separate `make ros2_demo` build target, `rtos/arm/Makefile`) links `xrce/`
+directly into a Cortex-M4 firmware image booting under QEMU
+(`netduinoplus2`, USART1, same as Phase 8's demo), frames every message
+with `xrce_serial_frame_encode()`, and sends it out over the emulated
+UART. Pointing a real `MicroXRCEAgent serial -D <pty>` at the pty QEMU
+allocates (`-serial pty`) produces the identical `create_client` / `session
+established` / `participant created` / `topic created` / `publisher
+created` / `datawriter created` / `[** <<DDS>> **]` log sequence as the UDP
+path -- proving the serial framing (Phase 1), not just the message
+construction (Phase 3), works against the real agent, from an actual
+emulated target, not a host-native test harness standing in for one.
+
+Two real bugs surfaced getting this working, both worth recording:
+- **QEMU's `-nographic` monitor dies with the launching shell.** Backgrounding
+  `qemu-system-arm -nographic ... &` and detaching with `disown` wasn't
+  enough -- QEMU still received `SIGHUP` and exited the moment the
+  launching shell session ended, because `-nographic` ties its monitor to
+  the controlling terminal. Fixed by launching under `setsid` with stdin
+  from `/dev/null` and `-monitor none` (no monitor needed for this,
+  since nothing drives it interactively).
+- **`send_frame()`'s frame buffer was sized for the wrong message.** It
+  hardcoded `XRCE_SERIAL_MAX_ENCODED_LEN(64)`, sized for CREATE_CLIENT and
+  the empty-XML publisher CREATE -- too small for topic/datawriter
+  CREATE's ~100+ byte XML payloads. `xrce_serial_frame_encode()` fails
+  safe (returns 0, no partial/corrupt write) on overflow, so nothing
+  crashed -- the datawriter CREATE was just silently never sent at all,
+  caught by its total absence from the agent's log (`participant
+  created`/`topic created`/`publisher created` all present,
+  `datawriter created` never appearing) despite the firmware itself
+  running correctly. Fixed by sizing the buffer for this demo's actual
+  largest message rather than a guessed constant.
+- **A real timing race, worked around rather than "fixed"**: the firmware
+  starts sending within a fraction of a real second of boot, but the host
+  agent process takes a few real seconds to attach to a freshly-allocated
+  pty. A send-once-at-boot handshake reliably lost that race and was never
+  seen. `ros2_demo.c` re-announces the full CREATE_CLIENT + entity sequence
+  every few publishes instead of once, so whichever attempt lands after the
+  agent attaches gets through; duplicate CREATEs for already-existing
+  entities just log `already exists` and are otherwise harmless. A real
+  client would instead read the agent's replies and retry on failure/
+  timeout -- this demo has no UART RX (see `ros2_demo.c`'s header comment),
+  so periodic blind re-announcement is the pragmatic stand-in.
 
 **Verified working, with the agent's own log as evidence, not just this
 project's opinion of itself:**
@@ -149,6 +194,11 @@ project's opinion of itself:**
   unmodified ROS2 CLI) shows its RTPS reader actively attempting to
   process each published sample -- the message gets all the way from this
   project's hand-rolled client, through the real agent, into real DDS.
+- All of the above reproduces identically whether the client is a host
+  process talking UDP (`host/live_publish_demo.c`) or real QEMU-booted ARM
+  firmware talking the actual serial framing over an emulated UART
+  (`rtos/arm/ros2_demo.c`) -- confirming Phase 1's transport, not just
+  Phase 3's message construction, works against the real agent.
 
 **Known gap, narrowed but not yet resolved:** the RTPS reader rejects the
 sample with `Change payload size of '12' bytes is larger than the history
