@@ -227,9 +227,37 @@ client/agent boundary is now confirmed correct and the mismatch is isolated
 to Fast-DDS's own reader-side type-size accounting, most likely because the
 topic was declared with a bare type-name string instead of real type
 introspection. See `xrce/docs/design.md`'s Phase 4 section for the exact
-evidence and the next step. Also not yet done: wiring this through the
-QEMU-side UART (Phase 4 above went over UDP, not the serial framing) and
-subscriptions/services (later phases).
+evidence and the next step.
+
+**Also verified over the actual serial transport, from real QEMU-booted
+ARM firmware** — not just a host process over UDP. `rtos/arm/ros2_demo.c`
+(`make ros2_demo` in `rtos/arm/`) links `xrce/` directly into a Cortex-M4
+image and sends the same protocol, framed, over the emulated UART:
+
+```bash
+# terminal 1, in WSL:
+cd rtos/arm && make ros2_demo
+setsid qemu-system-arm -M netduinoplus2 -nographic -kernel build/ros2_demo.elf \
+    -serial pty -monitor none < /dev/null   # prints the allocated /dev/pts/N
+# terminal 2:
+MicroXRCEAgent serial -D /dev/pts/N -b 115200
+# separately: ros2 topic echo /chatter
+```
+
+Produces the identical `create_client` → `participant/topic/publisher/
+datawriter created` → `[** <<DDS>> **]` sequence in the agent's log as the
+UDP path — confirming the serial framing itself (Phase 1), not just the
+message construction (Phase 3), works against the real agent from an
+actual emulated target. Hits the same Fast-DDS decode gap described above
+(expected — that gap is downstream of the transport). Two real bugs
+surfaced getting this working (QEMU's `-nographic` monitor dying with the
+launching shell; a demo-firmware buffer sized for the wrong message,
+silently dropping the datawriter CREATE) — see `xrce/docs/design.md` for
+both.
+
+Not yet done: subscriptions/services (later phases), and on-device reply
+parsing (this demo has no UART RX, so it re-announces blindly on a timer
+instead of retrying on failure).
 
 ## Project structure
 
@@ -255,6 +283,8 @@ rtos/
   docs/
     design.md              # architecture + internals writeup, including Phase 8 notes
   arm/                      # Phase 8: Cortex-M4 port, boots under QEMU/Renode (own README/Makefile)
+    ros2_demo.c              # Phase 4: xrce/ session layer over UART1, `make ros2_demo`
+    libc_shim.c              # minimal memcpy/strlen for the freestanding ros2_demo build
   Makefile
 
 xrce/                       # Micro XRCE-DDS client layer (Option A), portable/OS-independent
@@ -310,10 +340,11 @@ top of the kernel above, not part of it:**
 - [x] Phase 1 — Serial transport framing, unit-tested
 - [x] Phase 2 — CDR serialization (Int32/String/Imu), unit-tested
 - [x] Phase 3 — Session/entity-creation/WRITE_DATA, unit-tested
-- [~] Phase 4 — Host-side bridge: verified against a real agent over UDP
+- [~] Phase 4 — Host-side bridge: verified against a real agent over both
+      UDP and the real serial transport from QEMU-booted ARM firmware
       (session + all four entity types + WRITE_DATA reaching the RTPS
-      reader); type-registration payload-size mismatch and QEMU-UART
-      wiring not yet resolved
+      reader); a Fast-DDS reader-side type-size mismatch remains, isolated
+      to downstream of the confirmed-correct client/agent boundary
 - [ ] Phase 5 — Bidirectional (subscriptions, services) + realistic demo
 - [ ] Phase 6 — Latency/throughput measurement, fault handling, polish
 
