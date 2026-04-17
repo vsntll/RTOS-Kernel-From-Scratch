@@ -693,7 +693,7 @@ make examples
       <li class="phase"><span class="n">P1</span><span class="t">Serial transport framing</span><span class="d">byte-stuffed, CRC-16/ARC — unit-tested</span></li>
       <li class="phase"><span class="n">P2</span><span class="t">CDR serialization</span><span class="d">Int32 / String / Imu, alignment-aware — unit-tested</span></li>
       <li class="phase"><span class="n">P3</span><span class="t">Session + entity creation + WRITE_DATA</span><span class="d">CREATE_CLIENT, CREATE, WRITE_DATA — unit-tested</span></li>
-      <li class="phase stretch"><span class="n">P4</span><span class="t">Host-side bridge — partial</span><span class="d">verified live over UDP and real serial from QEMU; one known gap remains</span></li>
+      <li class="phase"><span class="n">P4</span><span class="t">Host-side bridge — working end to end</span><span class="d"><code>ros2 topic echo</code> decodes clean data, over UDP and real serial from QEMU</span></li>
     </ul>
 
     <h3 style="margin-top:30px;">Verified against a real agent, not just its own tests</h3>
@@ -707,8 +707,8 @@ make examples
         <p>Running this project's hand-built CREATE_CLIENT / CREATE / WRITE_DATA messages against an unmodified <code>MicroXRCEAgent</code>: its logs show <code>session established</code>, then <code>participant created</code>, <code>topic created</code>, <code>publisher created</code>, <code>datawriter created</code> — each from bytes this project constructed, not eProsima's client. Reproduces identically whether the client is a host process over UDP, or real QEMU-booted Cortex-M4 firmware talking the actual serial framing over an emulated UART — proof the transport works, not just the message construction.</p>
       </div>
       <div class="note">
-        <div class="tag">Known gap, stated plainly</div>
-        <p><code>ros2 topic echo</code>'s RTPS reader actively receives each published sample but rejects it on a payload-size mismatch, on both transports. Checked directly against the agent's own verbose log — it extracts and forwards this project's bytes to Fast-DDS byte-exact, unmodified — so the mismatch is isolated to Fast-DDS's own reader-side type-size accounting, downstream of the now-confirmed-correct client/agent boundary. See <code>xrce/docs/design.md</code> for the evidence and next step.</p>
+        <div class="tag">A real bug, traced to its actual cause</div>
+        <p><code>ros2 topic echo</code> initially rejected every sample with a payload-size mismatch, on both transports. Reading the agent's own <code>TopicPubSubType::serialize()</code> — not guessing — showed why: its generic dynamic topic type always prepends its own 4-byte CDR header, and this project's client was <em>also</em> including its own, producing a genuine double header. Fix: send just the field bytes, let the agent supply the encapsulation. <code>ros2 topic echo</code> now prints a clean, correct, monotonically increasing sequence. Full byte math in <code>xrce/docs/design.md</code>.</p>
       </div>
     </div>
 
