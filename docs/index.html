@@ -693,7 +693,7 @@ make examples
       <li class="phase"><span class="n">P1</span><span class="t">Serial transport framing</span><span class="d">byte-stuffed, CRC-16/ARC — unit-tested</span></li>
       <li class="phase"><span class="n">P2</span><span class="t">CDR serialization</span><span class="d">Int32 / String / Imu, alignment-aware — unit-tested</span></li>
       <li class="phase"><span class="n">P3</span><span class="t">Session + entity creation + WRITE_DATA</span><span class="d">CREATE_CLIENT, CREATE, WRITE_DATA — unit-tested</span></li>
-      <li class="phase stretch"><span class="n">P4</span><span class="t">Host-side bridge — partial</span><span class="d">verified live against a real agent, one known gap remains</span></li>
+      <li class="phase stretch"><span class="n">P4</span><span class="t">Host-side bridge — partial</span><span class="d">verified live over UDP and real serial from QEMU; one known gap remains</span></li>
     </ul>
 
     <h3 style="margin-top:30px;">Verified against a real agent, not just its own tests</h3>
@@ -704,22 +704,28 @@ make examples
       </div>
       <div class="note">
         <div class="tag">The real agent's own logs</div>
-        <p>Running this project's hand-built CREATE_CLIENT / CREATE / WRITE_DATA messages against an unmodified <code>MicroXRCEAgent</code>: its logs show <code>session established</code>, then <code>participant created</code>, <code>topic created</code>, <code>publisher created</code>, <code>datawriter created</code> — each from bytes this project constructed, not eProsima's client.</p>
+        <p>Running this project's hand-built CREATE_CLIENT / CREATE / WRITE_DATA messages against an unmodified <code>MicroXRCEAgent</code>: its logs show <code>session established</code>, then <code>participant created</code>, <code>topic created</code>, <code>publisher created</code>, <code>datawriter created</code> — each from bytes this project constructed, not eProsima's client. Reproduces identically whether the client is a host process over UDP, or real QEMU-booted Cortex-M4 firmware talking the actual serial framing over an emulated UART — proof the transport works, not just the message construction.</p>
       </div>
       <div class="note">
         <div class="tag">Known gap, stated plainly</div>
-        <p><code>ros2 topic echo</code>'s RTPS reader actively receives each published sample but rejects it on a payload-size mismatch — the topic was declared with a bare type-name string instead of real type introspection. The fix (real typesupport metadata or an XRCE-level type-registration path) is scoped and not yet done; see <code>xrce/docs/design.md</code>.</p>
+        <p><code>ros2 topic echo</code>'s RTPS reader actively receives each published sample but rejects it on a payload-size mismatch, on both transports. Checked directly against the agent's own verbose log — it extracts and forwards this project's bytes to Fast-DDS byte-exact, unmodified — so the mismatch is isolated to Fast-DDS's own reader-side type-size accounting, downstream of the now-confirmed-correct client/agent boundary. See <code>xrce/docs/design.md</code> for the evidence and next step.</p>
       </div>
     </div>
 
     <h3 style="margin-top:30px;">Try it</h3>
     <pre class="mono">cd xrce &amp;&amp; make test          <span class="dim"># host-native unit tests, no agent needed</span>
 
-<span class="dim"># against a real agent (after host/setup_wsl.sh):</span>
+<span class="dim"># against a real agent over UDP (after host/setup_wsl.sh):</span>
 MicroXRCEAgent udp4 -p 8888 &amp;
 gcc -Ixrce/include host/live_publish_demo.c xrce/build/libxrce.a -o /tmp/demo
 /tmp/demo 127.0.0.1 8888
-<span class="dim"># separately: ros2 topic echo /chatter</span></pre>
+
+<span class="dim"># or over the real serial transport, from QEMU-booted ARM firmware:</span>
+cd rtos/arm &amp;&amp; make ros2_demo
+setsid qemu-system-arm -M netduinoplus2 -nographic -kernel build/ros2_demo.elf -serial pty -monitor none &lt; /dev/null
+MicroXRCEAgent serial -D /dev/pts/N -b 115200   <span class="dim"># N printed by qemu above</span>
+
+<span class="dim"># separately, either way: ros2 topic echo /chatter</span></pre>
   </div>
 </section>
 
