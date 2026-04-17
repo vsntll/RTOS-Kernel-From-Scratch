@@ -17,16 +17,31 @@
  * representation, single best-effort output stream).
  *
  * Deliberately out of scope for this pass: reliable streams
- * (heartbeat/acknack retransmission), subscriptions/READ_DATA, and
- * services (request/reply) -- all real XRCE features, just later phases.
- * Every message here goes out on one best-effort output stream, so
- * delivery isn't guaranteed -- matching the serial transport layer's own
- * "reliability is a higher layer's job" stance (xrce/include/xrce/serial_transport.h). */
+ * (heartbeat/acknack retransmission) and services (request/reply) -- both
+ * real XRCE features, just later phases. Every message here goes out on
+ * one best-effort output stream, so delivery isn't guaranteed -- matching
+ * the serial transport layer's own "reliability is a higher layer's job"
+ * stance (xrce/include/xrce/serial_transport.h).
+ *
+ * Phase 5 adds the subscription half: READ_DATA (request the agent start
+ * delivering a datareader's samples) and parsing the DATA submessages it
+ * sends back. Symmetric with WRITE_DATA in an important, easy-to-miss way:
+ * just as this project strips its own CDR header before WRITE_DATA (the
+ * agent's generic topic type adds its own -- see the Phase 4 section of
+ * xrce/docs/design.md), the sample bytes inside a received DATA
+ * submessage are ALSO header-less raw field data, not a full CDR blob --
+ * ground-truthed against the reference client's read_access.c
+ * (read_format_data() hands the callback the buffer right after
+ * BaseObjectRequest, with no further unwrapping) and TopicPubSubType's
+ * deserialize() (`buffer->assign(payload->data + 4, ...)` -- the agent
+ * strips its own header before this project's client ever sees the bytes). */
 
 #define XRCE_OBJK_PARTICIPANT 0x01
 #define XRCE_OBJK_TOPIC 0x02
 #define XRCE_OBJK_PUBLISHER 0x03
+#define XRCE_OBJK_SUBSCRIBER 0x04
 #define XRCE_OBJK_DATAWRITER 0x05
+#define XRCE_OBJK_DATAREADER 0x06
 
 #define XRCE_STATUS_OK 0x00
 #define XRCE_STATUS_OK_MATCHED 0x01
@@ -84,5 +99,23 @@ size_t xrce_session_build_write_data(xrce_session_t *s, uint8_t stream_id_raw,
                                       xrce_object_id_t datawriter_id,
                                       const uint8_t *sample, size_t sample_len,
                                       uint8_t *buf, size_t cap);
+
+/* Requests the agent start delivering `datareader_id`'s samples as
+ * FORMAT_DATA (raw, no SampleInfo wrapper) on `preferred_stream_id_raw`
+ * (the raw stream byte the agent should use when sending DATA back to
+ * us -- this project always uses the same best-effort stream for both
+ * directions, so callers pass the same raw id as `stream_id_raw`). No
+ * content filter, no delivery control -- both left unset. */
+size_t xrce_session_build_read_data(xrce_session_t *s, uint8_t stream_id_raw,
+                                     xrce_object_id_t datareader_id,
+                                     uint8_t preferred_stream_id_raw, uint8_t *buf, size_t cap);
+
+/* Parses a received (deframed) message as a DATA submessage. On success,
+ * `*out_object_id` is the datareader the sample came from and
+ * `*out_sample`/`*out_sample_len` point at the raw field bytes within
+ * `buf` (valid only as long as `buf` is) -- header-less, see the header
+ * comment above for why. */
+bool xrce_session_parse_data(const uint8_t *buf, size_t len, xrce_object_id_t *out_object_id,
+                              const uint8_t **out_sample, size_t *out_sample_len);
 
 #endif
