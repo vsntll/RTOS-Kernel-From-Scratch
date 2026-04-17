@@ -123,8 +123,15 @@ int main(int argc, char **argv) {
             fprintf(stderr, "FAIL: encode\n");
             return 1;
         }
-        len = xrce_session_build_write_data(&s, BEST_EFFORT_STREAM_0, datawriter_id, sample,
-                                             sample_len, buf, sizeof(buf));
+        /* Strip our own 4-byte CDR encapsulation header before handing this
+         * to WRITE_DATA: the agent's generic/dynamic topic type
+         * (TopicPubSubType::serialize(), src/cpp/types/TopicPubSubType.cpp)
+         * always prepends its OWN CDR_LE header to whatever bytes it's
+         * given. Including ours too produced a double-header 12-byte
+         * sample the RTPS reader rejected -- confirmed by reading the
+         * agent's serialize() directly, not guessed. */
+        len = xrce_session_build_write_data(&s, BEST_EFFORT_STREAM_0, datawriter_id, sample + 4,
+                                             sample_len - 4, buf, sizeof(buf));
         if (sendto(g_fd, buf, len, 0, (struct sockaddr *)&g_addr, sizeof(g_addr)) != (ssize_t)len) {
             perror("sendto");
             return 1;
