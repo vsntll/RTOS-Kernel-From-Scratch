@@ -129,7 +129,7 @@ just round-tripping it.
 Status: unit-tested (byte-exact for CREATE_CLIENT, full field-decode for
 CREATE/WRITE_DATA) and cross-compiles for Cortex-M4.
 
-## Phase 4 — Host-side bridge (real agent) -- transport verified, one gap remains
+## Phase 4 — Host-side bridge (real agent) -- fully working end to end
 
 `host/live_agent_check.c` and `host/live_publish_demo.c` are manual,
 one-off programs (BSD sockets, not portable/embeddable, not part of
@@ -190,45 +190,56 @@ project's opinion of itself:**
 - CREATE participant/topic/publisher/datawriter (XML representation):
   agent logs `participant created`, `topic created`, `publisher created`,
   `datawriter created`, each with matching object ids.
-- WRITE_DATA reaches the DDS/RTPS layer: `ros2 topic echo /chatter` (real,
-  unmodified ROS2 CLI) shows its RTPS reader actively attempting to
-  process each published sample -- the message gets all the way from this
-  project's hand-rolled client, through the real agent, into real DDS.
+- WRITE_DATA reaches the DDS/RTPS layer and decodes cleanly:
+  `ros2 topic echo /chatter` (real, unmodified ROS2 CLI) prints correct,
+  monotonically increasing `data: N` values -- the message gets all the
+  way from this project's hand-rolled client, through the real agent, into
+  real DDS, decoded as a real `std_msgs/Int32`.
 - All of the above reproduces identically whether the client is a host
   process talking UDP (`host/live_publish_demo.c`) or real QEMU-booted ARM
   firmware talking the actual serial framing over an emulated UART
   (`rtos/arm/ros2_demo.c`) -- confirming Phase 1's transport, not just
   Phase 3's message construction, works against the real agent.
 
-**Known gap, narrowed but not yet resolved:** the RTPS reader rejects the
-sample with `Change payload size of '12' bytes is larger than the history
-payload size of '11' bytes and cannot be resized`. This reproduces
-identically under both `-m dds` and `-m rtps` agent middleware modes, which
-rules out one initial theory (dynamic-type creation quirks specific to one
-middleware backend).
+**Resolved: `ros2 topic echo /chatter` decodes clean, correct values.**
+Getting here took actually finding the root cause rather than guessing at
+it. The RTPS reader was rejecting samples with `Change payload size of
+'12' bytes is larger than the history payload size of '11' bytes and
+cannot be resized` -- reproducing identically under both `-m dds` and
+`-m rtps` agent middleware modes (ruling out a middleware-specific
+dynamic-type quirk) and identically over both UDP and the real serial
+transport (ruling out anything transport-related).
 
-Checked directly against the agent's own verbose (`-v 6`) log rather than
-guessed: `DataWriter.cpp`'s `[** <<DDS>> **]` line shows the agent extracts
-*exactly* this project's 8-byte CDR-encoded sample (`00 01 00 00 <int32 LE>`,
-`len: 8`) from the WRITE_DATA submessage and hands it to
-`middleware.write_data()` -- i.e., `Processor::process_write_data_submessage`
-and `DataWriter::write()` (both read from the agent's own source,
-`src/cpp/processor/Processor.cpp` / `src/cpp/datawriter/DataWriter.cpp`)
-strip the `BaseObjectRequest` header correctly and forward this project's
-bytes unmodified. So the client and agent sides of the boundary are now
-verified byte-exact; the "12 vs 11" mismatch is happening downstream of
-that, inside Fast-DDS's own RTPS reader-side history/type-size accounting
-(likely related to the topic being declared with a bare type-name string
-rather than real type introspection/a TypeObject, but not confirmed to
-that level of certainty the way the client/agent boundary now is).
+Traced by reading the agent's own source, not by trial and error:
+- `DataWriter.cpp`'s `[** <<DDS>> **]` verbose log confirmed the agent
+  extracts *exactly* this project's 8-byte CDR-encoded sample
+  (`00 01 00 00 <int32 LE>`) from WRITE_DATA and hands it, unmodified, to
+  `middleware.write_data()` -- so the client/agent submessage boundary was
+  never the problem.
+- The actual cause was one level further in:
+  `src/cpp/types/TopicPubSubType.cpp`'s `serialize()` -- the generic,
+  dynamically-created topic type every XML-declared entity in this project
+  uses -- **always** writes its own 4-byte CDR_LE encapsulation header
+  (`payload->data[0..3] = 0,1,0,0`) in front of whatever byte vector
+  `write_data()` hands it, then `memcpy`s that vector in after. This
+  project's client was *also* including its own 4-byte header inside that
+  vector (correct, reusable CDR -- see Phase 2), producing a genuine
+  double header: 4 (agent's) + 4 (ours) + 4 (the actual `int32`) = 12
+  bytes, which is exactly the "12" the reader saw, in front of a real
+  `std_msgs/Int32`'s true 8-byte encoding.
 
-Next concrete step: either give the agent real type introspection for
-`std_msgs/Int32` (an `OBJK_TYPE` entity, or a `REF`-based topic pointing at
-a profile with real type info, rather than a bare XML name string), or
-trace further into Fast-DDS's dynamic-type size inference directly. Not
-done in this pass -- called out explicitly rather than left implicit,
-since "the agent accepts our messages" and "the full pipe decodes cleanly
-end to end" are different claims and only the first is fully nailed down.
+**Fix:** strip this project's own 4-byte CDR header before handing sample
+bytes to `xrce_session_build_write_data()` -- send just the field bytes
+(`sample + 4, sample_len - 4`), since the agent's generic topic type
+supplies the encapsulation header itself. Applied at both call sites
+(`host/live_publish_demo.c`, `rtos/arm/ros2_demo.c`); `xrce/cdr.c`/`msgs.c`
+themselves are untouched and still correct as standalone CDR encoders --
+this is specifically about how bytes get handed to *this agent's*
+generic/dynamic topic path, not a bug in the CDR layer itself.
+
+Confirmed working after the fix, both transports: `ros2 topic echo
+/chatter` prints a clean, monotonically increasing sequence of `data: N`
+values, sustained over hundreds of samples with no further errors.
 
 Both files' XML entity-representation strings (the `<dds>...</dds>`
 wrapper, element-not-attribute children) are ground-truthed against
