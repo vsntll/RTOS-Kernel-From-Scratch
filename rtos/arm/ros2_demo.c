@@ -170,10 +170,15 @@ int main(void) {
             for (;;) {
             }
         }
+        /* Strip our own 4-byte CDR encapsulation header: the agent's
+         * generic/dynamic topic type (TopicPubSubType::serialize() in its
+         * own source) always prepends its own CDR_LE header to whatever
+         * bytes it receives. Sending ours too produced a double-header
+         * sample the RTPS reader rejected -- see xrce/docs/design.md. */
         uint8_t msg[64];
         size_t len = xrce_session_build_write_data(&session, BEST_EFFORT_STREAM_0,
-                                                     g_datawriter_id, sample, sample_len, msg,
-                                                     sizeof(msg));
+                                                     g_datawriter_id, sample + 4, sample_len - 4,
+                                                     msg, sizeof(msg));
         send_frame(msg, len);
         uart_puts("published data=");
         uart_put_uint((uint32_t)i);
