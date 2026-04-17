@@ -204,60 +204,55 @@ All three are unit-tested (including byte-exact checks against
 hand-computed expected wire bytes, not just round-trips) and cross-compile
 cleanly for the Cortex-M4 target.
 
-**Verified against a real, unmodified agent** (`host/live_agent_check.c`,
-`host/live_publish_demo.c` — manual one-off programs, not part of
-`make test`, since they need a live external agent process):
+**Verified end to end against a real, unmodified agent** — both over UDP
+from a host process and over the real serial transport from real
+QEMU-booted ARM firmware (`host/live_agent_check.c`,
+`host/live_publish_demo.c`, `rtos/arm/ros2_demo.c` — manual programs, not
+part of `make test`, since they need a live external agent process):
 
 ```bash
-# in WSL, after host/setup_wsl.sh:
+# UDP, in WSL after host/setup_wsl.sh:
 MicroXRCEAgent udp4 -p 8888 &
 gcc -Ixrce/include host/live_publish_demo.c xrce/build/libxrce.a -o /tmp/demo
 /tmp/demo 127.0.0.1 8888
-# separately: ros2 topic echo /chatter
-```
 
-The agent's own logs confirm session establishment and participant/topic/
-publisher/datawriter creation from this project's hand-built protocol
-messages, and `ros2 topic echo`'s RTPS reader actively receives each
-published sample. **Not yet resolved:** the reader rejects the sample on a
-payload-size mismatch (reproduces under both agent middleware modes).
-Checked directly against the agent's own verbose log — it extracts and
-forwards this project's bytes to Fast-DDS byte-exact, unmodified — so the
-client/agent boundary is now confirmed correct and the mismatch is isolated
-to Fast-DDS's own reader-side type-size accounting, most likely because the
-topic was declared with a bare type-name string instead of real type
-introspection. See `xrce/docs/design.md`'s Phase 4 section for the exact
-evidence and the next step.
-
-**Also verified over the actual serial transport, from real QEMU-booted
-ARM firmware** — not just a host process over UDP. `rtos/arm/ros2_demo.c`
-(`make ros2_demo` in `rtos/arm/`) links `xrce/` directly into a Cortex-M4
-image and sends the same protocol, framed, over the emulated UART:
-
-```bash
-# terminal 1, in WSL:
+# or the real serial transport, from QEMU-booted ARM firmware:
 cd rtos/arm && make ros2_demo
 setsid qemu-system-arm -M netduinoplus2 -nographic -kernel build/ros2_demo.elf \
     -serial pty -monitor none < /dev/null   # prints the allocated /dev/pts/N
-# terminal 2:
 MicroXRCEAgent serial -D /dev/pts/N -b 115200
-# separately: ros2 topic echo /chatter
+
+# either way, separately:
+ros2 topic echo /chatter
 ```
 
-Produces the identical `create_client` → `participant/topic/publisher/
-datawriter created` → `[** <<DDS>> **]` sequence in the agent's log as the
-UDP path — confirming the serial framing itself (Phase 1), not just the
-message construction (Phase 3), works against the real agent from an
-actual emulated target. Hits the same Fast-DDS decode gap described above
-(expected — that gap is downstream of the transport). Two real bugs
-surfaced getting this working (QEMU's `-nographic` monitor dying with the
-launching shell; a demo-firmware buffer sized for the wrong message,
-silently dropping the datawriter CREATE) — see `xrce/docs/design.md` for
-both.
+**`ros2 topic echo` prints a clean, correct, monotonically increasing
+`data: N` sequence** — sustained over hundreds of samples, on both
+transports. Getting there meant tracing a real bug past the point of "the
+agent accepts our messages": its logs confirmed session/entity creation
+and WRITE_DATA reaching the DDS layer, but the RTPS reader initially
+rejected every sample with a payload-size mismatch. Reading the agent's
+own `TopicPubSubType::serialize()` (not guessing) showed why: its generic,
+dynamically-created topic type always prepends its own 4-byte CDR
+encapsulation header to whatever bytes it's given — and this project's
+client was *also* including its own header, producing a genuine double
+header. Fix: send just the field bytes to `WRITE_DATA`, letting the agent
+supply the encapsulation. `xrce/cdr.c`/`msgs.c` themselves were never
+wrong — this was specifically about what bytes to hand this agent's
+generic topic path. Full account, including the exact byte math, in
+`xrce/docs/design.md`.
 
-Not yet done: subscriptions/services (later phases), and on-device reply
-parsing (this demo has no UART RX, so it re-announces blindly on a timer
-instead of retrying on failure).
+Three other real bugs surfaced building the QEMU-serial path, also
+recorded there: QEMU's `-nographic` monitor dying with the launching
+shell (fixed with `setsid`), a demo firmware buffer sized for the wrong
+message (silently dropping the datawriter CREATE), and a real timing race
+between firmware boot and agent-to-pty attachment (worked around with
+periodic re-announcement, since this demo has no UART RX to read replies
+and retry properly).
+
+Not yet done: subscriptions/services and a bidirectional demo (later
+phases), on-device reply parsing, multi-node, latency/fault-handling
+writeup.
 
 ## Project structure
 
@@ -340,11 +335,9 @@ top of the kernel above, not part of it:**
 - [x] Phase 1 — Serial transport framing, unit-tested
 - [x] Phase 2 — CDR serialization (Int32/String/Imu), unit-tested
 - [x] Phase 3 — Session/entity-creation/WRITE_DATA, unit-tested
-- [~] Phase 4 — Host-side bridge: verified against a real agent over both
+- [x] Phase 4 — Host-side bridge: `ros2 topic echo` decodes clean, correct
+      data end to end, verified against a real, unmodified agent over both
       UDP and the real serial transport from QEMU-booted ARM firmware
-      (session + all four entity types + WRITE_DATA reaching the RTPS
-      reader); a Fast-DDS reader-side type-size mismatch remains, isolated
-      to downstream of the confirmed-correct client/agent boundary
 - [ ] Phase 5 — Bidirectional (subscriptions, services) + realistic demo
 - [ ] Phase 6 — Latency/throughput measurement, fault handling, polish
 
