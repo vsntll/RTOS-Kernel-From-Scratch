@@ -9,6 +9,9 @@
 #define XRCE_SUBMSG_STATUS_AGENT 4
 #define XRCE_SUBMSG_STATUS 5
 #define XRCE_SUBMSG_WRITE_DATA 7
+#define XRCE_SUBMSG_READ_DATA 8
+#define XRCE_SUBMSG_DATA 9
+#define XRCE_FORMAT_DATA 0x00
 
 #define XRCE_FLAG_ENDIANNESS_LE 0x01
 #define XRCE_REPRESENTATION_AS_XML_STRING 0x02
@@ -45,6 +48,16 @@ static bool write_object_id(xrce_cdr_writer_t *w, xrce_object_id_t oid) {
     raw[0] = (uint8_t)(oid.id >> 4);
     raw[1] = (uint8_t)((uint8_t)(oid.id << 4) | (oid.kind & 0x0F));
     return xrce_cdr_write_bytes(w, raw, sizeof(raw));
+}
+
+static bool read_object_id(xrce_cdr_reader_t *r, xrce_object_id_t *oid) {
+    uint8_t raw[2];
+    if (!xrce_cdr_read_bytes(r, raw, sizeof(raw))) {
+        return false;
+    }
+    oid->id = (uint16_t)(((uint16_t)raw[0] << 4) | (raw[1] >> 4));
+    oid->kind = raw[1] & 0x0F;
+    return true;
 }
 
 /* RequestId is big-endian (unlike everything else here, which is LE) --
@@ -265,4 +278,64 @@ size_t xrce_session_build_write_data(xrce_session_t *s, uint8_t stream_id_raw,
 
     backpatch_length(buf, header_pos, w.pos - payload_start);
     return w.pos;
+}
+
+size_t xrce_session_build_read_data(xrce_session_t *s, uint8_t stream_id_raw,
+                                     xrce_object_id_t datareader_id,
+                                     uint8_t preferred_stream_id_raw, uint8_t *buf, size_t cap) {
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, cap);
+
+    if (!write_message_header(&w, s->session_id, stream_id_raw, s->out_seq_num, s->client_key)) {
+        return 0;
+    }
+    s->out_seq_num++;
+
+    size_t header_pos;
+    if (!submessage_header_at(&w, XRCE_SUBMSG_READ_DATA, XRCE_FLAG_ENDIANNESS_LE, &header_pos)) {
+        return 0;
+    }
+
+    size_t payload_start = w.pos;
+    uint16_t request_id = s->next_request_id++;
+    if (!write_base_object_request(&w, request_id, datareader_id) ||
+        !xrce_cdr_write_u8(&w, preferred_stream_id_raw) ||
+        !xrce_cdr_write_u8(&w, XRCE_FORMAT_DATA) ||
+        !xrce_cdr_write_bool(&w, false) /* optional_content_filter_expression */ ||
+        !xrce_cdr_write_bool(&w, false) /* optional_delivery_control */) {
+        return 0;
+    }
+
+    backpatch_length(buf, header_pos, w.pos - payload_start);
+    return w.pos;
+}
+
+bool xrce_session_parse_data(const uint8_t *buf, size_t len, xrce_object_id_t *out_object_id,
+                              const uint8_t **out_sample, size_t *out_sample_len) {
+    xrce_cdr_reader_t r;
+    xrce_cdr_reader_init(&r, buf, len);
+    if (!skip_message_header(&r)) {
+        return false;
+    }
+    uint8_t id, flags;
+    uint16_t sub_len;
+    if (!xrce_cdr_read_u8(&r, &id) || !xrce_cdr_read_u8(&r, &flags) || !read_u16(&r, &sub_len)) {
+        return false;
+    }
+    (void)flags;
+    (void)sub_len;
+    if (id != XRCE_SUBMSG_DATA) {
+        return false;
+    }
+
+    uint8_t request_id_raw[2];
+    if (!xrce_cdr_read_bytes(&r, request_id_raw, sizeof(request_id_raw)) ||
+        !read_object_id(&r, out_object_id)) {
+        return false;
+    }
+    (void)request_id_raw;
+
+    *out_sample = &buf[r.pos];
+    *out_sample_len = r.len - r.pos;
+    return true;
 }
