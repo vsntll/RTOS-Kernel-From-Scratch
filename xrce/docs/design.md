@@ -249,9 +249,52 @@ attempt using an attribute-style shorthand (`<dds_topic name="..."
 which is exactly the kind of interop detail this project exists to get
 right rather than guess at.
 
+## Phase 5 — Subscriptions (bidirectional communication) -- core working
+
+`session.h/c` gained the read/receive half of the protocol: `READ_DATA`
+(ask the agent to start delivering a datareader's samples on a chosen
+stream) and parsing the `DATA` submessages the agent sends back.
+Ground-truthed against the reference client's `read_access.c`
+(`uxr_buffer_request_data()` for `READ_DATA`'s `ReadSpecification` layout;
+`read_submessage_data()`/`read_format_data()` for how `DATA`'s payload is
+handed to a caller -- raw bytes right after `BaseObjectRequest`, no further
+wrapping) and its `Deployment/subscriber.c` /
+`examples/SubscribeHelloWorld/main.c` for the subscriber/datareader XML
+shapes (`<data_reader><topic><kind>NO_KEY</kind>...` -- same structure as
+the datawriter XML from Phase 3/4, just the other entity kind).
+
+One detail that would have been easy to get backwards: DATA's sample bytes
+are **header-less**, the mirror image of the WRITE_DATA fix in Phase 4 --
+`TopicPubSubType::deserialize()` in the agent's source strips its own
+4-byte CDR header before this project's client ever sees the bytes
+(`buffer->assign(payload->data + 4, ...)`), so `xrce_session_parse_data()`
+hands back raw field data directly, not something that needs
+`xrce_cdr_read_header()` first. Unit-tested in `test_subscribe.c`
+(`xrce/tests/`), including a hand-built incoming `DATA` message to prove
+parsing works without needing a live agent for that level of test.
+
+**Verified against a real agent, genuinely bidirectional:**
+`host/live_subscribe_demo.c` creates a participant/topic/subscriber/
+datareader and sends `READ_DATA` against a real, unmodified
+`MicroXRCEAgent`; a real `ros2 topic pub /cmd std_msgs/msg/Int32
+"{data: 99}" --once` (the standard ROS2 CLI, not anything from this
+project) drove it, and the demo printed
+`received /cmd data=99 (from object 0x001 kind 0x6)` -- a value that
+originated in a real ROS2 publisher, decoded correctly by this project's
+own client, with zero involvement from eProsima's client code on the
+receiving end either. This is the concrete "host sends a command, the
+client receives it" half of the original bidirectional brief.
+
+Not yet done: wiring this into `rtos/arm/ros2_demo.c` (would need UART RX
+-- `uart.c` is polled-TX-only, see its own header comment -- plus an
+actual reason for the RTOS side to *do* something with a received command,
+e.g. a simulated setpoint variable, per the original brief), and services
+(request/reply, a different submessage pair again).
+
 ## Later phases
 
-Not started (subscriptions/READ_DATA, services, bidirectional demo,
-multi-node, latency/fault-handling writeup). Tracked at a high level in the
-top-level project plan; this file gets a new dated section per phase as it
-actually lands, same convention as `rtos/docs/design.md`.
+Not started (services/request-reply, a realistic combined publish+
+subscribe demo scenario, multi-node, latency/fault-handling writeup).
+Tracked at a high level in the top-level project plan; this file gets a
+new dated section per phase as it actually lands, same convention as
+`rtos/docs/design.md`.
