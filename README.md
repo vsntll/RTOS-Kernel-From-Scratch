@@ -250,9 +250,19 @@ between firmware boot and agent-to-pty attachment (worked around with
 periodic re-announcement, since this demo has no UART RX to read replies
 and retry properly).
 
-Not yet done: subscriptions/services and a bidirectional demo (later
-phases), on-device reply parsing, multi-node, latency/fault-handling
-writeup.
+**Subscriptions (Phase 5) also work, genuinely bidirectionally.**
+`host/live_subscribe_demo.c` creates a participant/topic/subscriber/
+datareader and issues `READ_DATA` against a real, unmodified agent; a real
+`ros2 topic pub /cmd std_msgs/msg/Int32 "{data: 99}" --once` — the
+standard ROS2 CLI, nothing from this project — drove it, and the demo
+printed `received /cmd data=99`. Ground-truthed the same way as
+everything else: `DATA`'s sample bytes turned out to be header-less too,
+the mirror of the WRITE_DATA fix above, confirmed by reading the agent's
+`TopicPubSubType::deserialize()` directly.
+
+Not yet done: services (request/reply), wiring subscriptions into
+`rtos/arm/ros2_demo.c` (needs UART RX — `uart.c` is polled-TX-only),
+multi-node, latency/fault-handling writeup.
 
 ## Project structure
 
@@ -293,6 +303,7 @@ host/                        # host-side scripts and live-agent test programs
   run_qemu.sh                 # boots rtos/arm/build/kernel.elf under QEMU
   live_agent_check.c          # manual: CREATE_CLIENT against a real MicroXRCEAgent
   live_publish_demo.c         # manual: full entity-creation + publish loop against a real agent
+  live_subscribe_demo.c       # manual: subscription, driven live by `ros2 topic pub`
 ```
 
 ## Kernel API (summary)
@@ -338,7 +349,9 @@ top of the kernel above, not part of it:**
 - [x] Phase 4 — Host-side bridge: `ros2 topic echo` decodes clean, correct
       data end to end, verified against a real, unmodified agent over both
       UDP and the real serial transport from QEMU-booted ARM firmware
-- [ ] Phase 5 — Bidirectional (subscriptions, services) + realistic demo
+- [~] Phase 5 — Subscriptions verified bidirectionally against `ros2 topic
+      pub`; services (request/reply) and a realistic combined demo not
+      yet done
 - [ ] Phase 6 — Latency/throughput measurement, fault handling, polish
 
 ## Troubleshooting
