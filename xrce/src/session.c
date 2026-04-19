@@ -298,11 +298,27 @@ size_t xrce_session_build_read_data(xrce_session_t *s, uint8_t stream_id_raw,
 
     size_t payload_start = w.pos;
     uint16_t request_id = s->next_request_id++;
+    /* optional_delivery_control MUST be true with max_samples set to
+     * "unlimited" (0xFFFF, matching UXR_MAX_SAMPLES_UNLIMITED in the
+     * reference client) for a real, continuously-running subscription.
+     * Omitting delivery_control (what an earlier version of this function
+     * did) isn't just "no limit specified" -- the agent's own
+     * DataReader::read() defaults it to max_samples=1, a ONE-SHOT read.
+     * Confirmed by testing against a real agent: the first published
+     * value after CREATE arrived, but nothing after -- rediscovered by
+     * reading DataReader.cpp's `else { ... max_samples(1); }` branch,
+     * and confirmed against the reference client's own
+     * examples/SubscribeHelloWorld/main.c, which always sets this
+     * explicitly for exactly this reason. */
     if (!write_base_object_request(&w, request_id, datareader_id) ||
         !xrce_cdr_write_u8(&w, preferred_stream_id_raw) ||
         !xrce_cdr_write_u8(&w, XRCE_FORMAT_DATA) ||
         !xrce_cdr_write_bool(&w, false) /* optional_content_filter_expression */ ||
-        !xrce_cdr_write_bool(&w, false) /* optional_delivery_control */) {
+        !xrce_cdr_write_bool(&w, true) /* optional_delivery_control */ ||
+        !write_u16(&w, 0xFFFF) /* max_samples: unlimited */ ||
+        !write_u16(&w, 0) /* max_elapsed_time: unlimited */ ||
+        !write_u16(&w, 0) /* max_bytes_per_seconds: unlimited */ ||
+        !write_u16(&w, 0) /* min_pace_period: none */) {
         return 0;
     }
 
