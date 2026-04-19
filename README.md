@@ -21,7 +21,7 @@ On top of that ARM port, `xrce/` implements enough of the real **Micro
 XRCE-DDS Client protocol** — the same wire protocol actual micro-ROS boards
 speak over their debug UART — for this RTOS to interoperate with a real,
 unmodified `MicroXRCEAgent` and publish into a real ROS2 graph. See
-[ROS2 client layer](#ros2-client-layer-micro-xrce-dds-option-a) below for
+[ROS2 client layer](#ros2-client-layer-micro-xrce-dds) below for
 what's implemented, what's verified against the live agent, and what isn't
 done yet.
 
@@ -177,7 +177,7 @@ Renode's own log instead of a window. See `rtos/arm/README.md` for what's
 different from the host-native kernel, and `docs/design.md` for two bugs
 that only showed up under real hardware exception semantics.
 
-## ROS2 client layer (Micro XRCE-DDS, Option A)
+## ROS2 client layer (Micro XRCE-DDS)
 
 `xrce/` is portable, OS-independent C — no RTOS dependency, host-native
 testable via its own `Makefile`, same `src/`+`tests/` pattern as `rtos/`:
