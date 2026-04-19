@@ -105,7 +105,12 @@ size_t xrce_session_build_write_data(xrce_session_t *s, uint8_t stream_id_raw,
  * (the raw stream byte the agent should use when sending DATA back to
  * us -- this project always uses the same best-effort stream for both
  * directions, so callers pass the same raw id as `stream_id_raw`). No
- * content filter, no delivery control -- both left unset. */
+ * content filter. Always requests UNLIMITED delivery (max_samples =
+ * 0xFFFF) -- NOT the same as "no delivery control specified": the agent
+ * defaults an omitted delivery_control to a ONE-SHOT single sample, which
+ * looks like it works (the first published value arrives) right up until
+ * the second one silently never does. See session.c for how this was
+ * actually found. */
 size_t xrce_session_build_read_data(xrce_session_t *s, uint8_t stream_id_raw,
                                      xrce_object_id_t datareader_id,
                                      uint8_t preferred_stream_id_raw, uint8_t *buf, size_t cap);
