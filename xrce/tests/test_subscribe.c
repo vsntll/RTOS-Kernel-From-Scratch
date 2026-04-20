@@ -64,7 +64,16 @@ static void case_read_data_round_trip(void) {
     assert(xrce_cdr_read_u8(&r, &preferred_stream) && preferred_stream == 1);
     assert(xrce_cdr_read_u8(&r, &data_format) && data_format == 0x00 /* FORMAT_DATA */);
     assert(xrce_cdr_read_bool(&r, &optional_filter) && !optional_filter);
-    assert(xrce_cdr_read_bool(&r, &optional_delivery) && !optional_delivery);
+    /* Always true, with max_samples = unlimited -- omitting delivery_control
+     * entirely defaults the agent to a ONE-SHOT single-sample read, which
+     * is not what a real subscription wants. See session.c/session.h for
+     * how this was found. */
+    assert(xrce_cdr_read_bool(&r, &optional_delivery) && optional_delivery);
+    int16_t max_samples_raw, max_elapsed_raw, max_bytes_raw, min_pace_raw;
+    assert(xrce_cdr_read_i16(&r, &max_samples_raw) && (uint16_t)max_samples_raw == 0xFFFF);
+    assert(xrce_cdr_read_i16(&r, &max_elapsed_raw) && max_elapsed_raw == 0);
+    assert(xrce_cdr_read_i16(&r, &max_bytes_raw) && max_bytes_raw == 0);
+    assert(xrce_cdr_read_i16(&r, &min_pace_raw) && min_pace_raw == 0);
     assert(r.pos == len);
 }
 
