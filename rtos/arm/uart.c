@@ -24,7 +24,9 @@
 #define USART1_BRR (*(volatile uint32_t *)(USART1_BASE + 0x08u))
 #define USART1_CR1 (*(volatile uint32_t *)(USART1_BASE + 0x0Cu))
 
+#define USART_SR_RXNE (1u << 5)
 #define USART_SR_TXE (1u << 7)
+#define USART_CR1_RE (1u << 2)
 #define USART_CR1_TE (1u << 3)
 #define USART_CR1_UE (1u << 13)
 
@@ -49,7 +51,7 @@ void uart_init(void) {
      * QEMU run; a wrong BRR still transmits complete bytes to the chardev,
      * it just wouldn't matter on real silicon either way here. */
     USART1_BRR = 0x0683;
-    USART1_CR1 = USART_CR1_UE | USART_CR1_TE;
+    USART1_CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE;
 }
 
 void uart_putc(char c) {
@@ -62,4 +64,11 @@ void uart_puts(const char *s) {
     while (*s) {
         uart_putc(*s++);
     }
+}
+
+int uart_getc_nonblocking(void) {
+    if (USART1_SR & USART_SR_RXNE) {
+        return (int)(USART1_DR & 0xFFu);
+    }
+    return -1;
 }
