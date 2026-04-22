@@ -249,7 +249,7 @@ attempt using an attribute-style shorthand (`<dds_topic name="..."
 which is exactly the kind of interop detail this project exists to get
 right rather than guess at.
 
-## Phase 5 — Subscriptions (bidirectional communication) -- core working
+## Phase 5 — Subscriptions (bidirectional communication) -- protocol working over UDP, serial wiring not yet working
 
 `session.h/c` gained the read/receive half of the protocol: `READ_DATA`
 (ask the agent to start delivering a datareader's samples on a chosen
@@ -273,7 +273,7 @@ hands back raw field data directly, not something that needs
 (`xrce/tests/`), including a hand-built incoming `DATA` message to prove
 parsing works without needing a live agent for that level of test.
 
-**Verified against a real agent, genuinely bidirectional:**
+**Verified against a real agent, genuinely bidirectional -- over UDP:**
 `host/live_subscribe_demo.c` creates a participant/topic/subscriber/
 datareader and sends `READ_DATA` against a real, unmodified
 `MicroXRCEAgent`; a real `ros2 topic pub /cmd std_msgs/msg/Int32
@@ -285,11 +285,61 @@ own client, with zero involvement from eProsima's client code on the
 receiving end either. This is the concrete "host sends a command, the
 client receives it" half of the original bidirectional brief.
 
-Not yet done: wiring this into `rtos/arm/ros2_demo.c` (would need UART RX
--- `uart.c` is polled-TX-only, see its own header comment -- plus an
-actual reason for the RTOS side to *do* something with a received command,
-e.g. a simulated setpoint variable, per the original brief), and services
-(request/reply, a different submessage pair again).
+**A real bug, found and fixed: `READ_DATA` defaulted to one-shot.** The
+first version of `xrce_session_build_read_data()` set
+`optional_delivery_control = false`, which read like "no limits
+requested." It's actually the opposite: `DataReader::read()` in the
+agent's own source defaults an *omitted* delivery control to
+`max_samples(1)` -- a single read, not a subscription. This looked like it
+worked (the very first published value arrived) right up until a second
+`ros2 topic pub` silently produced nothing. Fixed by always requesting
+`optional_delivery_control = true` with `max_samples = 0xFFFF`
+(`UXR_MAX_SAMPLES_UNLIMITED` in the reference client, which
+`examples/SubscribeHelloWorld/main.c` always sets explicitly for exactly
+this reason). Confirmed after the fix: three sequential
+`ros2 topic pub` calls (values 1, 2, 3) all arrived, in order, over the
+same long-lived subscription.
+
+**Attempted, not yet working: wiring this into `rtos/arm/ros2_demo.c`
+over the real serial transport.** `uart.c` gained polled RX
+(`uart_getc_nonblocking()`), and the firmware now creates a full
+subscriber/datareader for `rt/setpoint` alongside the existing publisher,
+feeding received bytes through `xrce_serial_reader_feed()` and printing
+`setpoint updated: N` when a matching `DATA` submessage decodes. Tested
+against a real agent (via a small Python bidirectional pty relay so both
+QEMU's UART traffic and the human-readable prints could be observed at
+once, since the agent otherwise holds the pty exclusively) -- entity
+creation succeeds every time (`datareader created` in the agent's log),
+and the agent's own log confirms it reads the published value from DDS
+(`[==>> DDS <<==]`, correct header-less bytes), but no `DATA` submessage
+was ever observed reaching the firmware, checked directly in the raw pty
+traffic. Two contributing-but-not-fully-explaining factors found along
+the way:
+- Re-announcing `READ_DATA` too often (a 5-publish interval, ~170ms under
+  QEMU's fast busy-loop) keeps restarting the agent's internal delivery
+  thread (`DataReader::read()` always calls `stop_reading()` before
+  `start_reading()`), which alone could starve real deliveries. Backed off
+  to a much longer interval (`REANNOUNCE_EVERY_N_PUBLISHES = 200` in
+  `ros2_demo.c`) -- necessary, but not sufficient: delivery still didn't
+  arrive with this change alone.
+- Sending `READ_DATA` exactly once (the alternative extreme) reintroduces
+  the same boot-timing race `CREATE_CLIENT`'s periodic re-announcement
+  exists to solve in the first place (the agent takes a few real seconds
+  to attach to a freshly-allocated pty; a one-time send at boot is easily
+  lost).
+
+Since the identical `READ_DATA`/`DATA` code, unchanged, works correctly
+and repeatedly over UDP, the protocol implementation itself is not in
+question here -- what's unresolved is specific to this transport/test
+combination (real serial, through a manually-bridged pty pair rather than
+a direct QEMU-to-agent connection). Not root-caused further in this pass;
+a reasonable next step would be tracing the agent's
+`SessionManager::get_endpoint()`/`push_output_submessage()` path for the
+serial transport specifically, or testing with a real (non-emulated)
+serial connection to rule out the pty-bridging setup itself as a factor.
+
+Also not yet done: services (request/reply, a different submessage pair
+again), and a `ros2 topic pub`-to-QEMU demo confirmed working end to end.
 
 ## Later phases
 
