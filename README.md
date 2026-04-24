@@ -250,7 +250,7 @@ between firmware boot and agent-to-pty attachment (worked around with
 periodic re-announcement, since this demo has no UART RX to read replies
 and retry properly).
 
-**Subscriptions (Phase 5) also work, genuinely bidirectionally.**
+**Subscriptions (Phase 5) also work, genuinely bidirectionally — over UDP.**
 `host/live_subscribe_demo.c` creates a participant/topic/subscriber/
 datareader and issues `READ_DATA` against a real, unmodified agent; a real
 `ros2 topic pub /cmd std_msgs/msg/Int32 "{data: 99}" --once` — the
@@ -258,10 +258,27 @@ standard ROS2 CLI, nothing from this project — drove it, and the demo
 printed `received /cmd data=99`. Ground-truthed the same way as
 everything else: `DATA`'s sample bytes turned out to be header-less too,
 the mirror of the WRITE_DATA fix above, confirmed by reading the agent's
-`TopicPubSubType::deserialize()` directly.
+`TopicPubSubType::deserialize()` directly. One more real bug found this
+way: `READ_DATA` originally defaulted to a **one-shot** read (the agent's
+own `DataReader::read()` treats an omitted delivery control as
+`max_samples(1)`, not "unlimited") — the first published value arrived,
+the second silently didn't, until fixed to always request
+`max_samples = 0xFFFF` explicitly. Confirmed after the fix: three
+sequential publishes all arrived, in order.
 
-Not yet done: services (request/reply), wiring subscriptions into
-`rtos/arm/ros2_demo.c` (needs UART RX — `uart.c` is polled-TX-only),
+`uart.c` gained RX and `rtos/arm/ros2_demo.c` now creates a matching
+subscription for a `rt/setpoint` topic — **but live delivery over the
+real serial transport doesn't work yet**, unlike everything else in this
+project. Entity creation succeeds and the agent's own log confirms it
+reads the published value from DDS, but no `DATA` submessage was ever
+observed reaching the firmware in testing (checked directly in the raw
+serial traffic via a bidirectional pty relay). Since the same
+`READ_DATA`/`DATA` code works correctly and repeatedly over UDP, this
+looks like a transport/test-setup-specific issue rather than a protocol
+bug, but it isn't root-caused — see `xrce/docs/design.md`'s Phase 5
+section for what was ruled out and what wasn't.
+
+Not yet done: root-causing the above, services (request/reply),
 multi-node, latency/fault-handling writeup.
 
 ## Project structure
@@ -350,8 +367,10 @@ top of the kernel above, not part of it:**
       data end to end, verified against a real, unmodified agent over both
       UDP and the real serial transport from QEMU-booted ARM firmware
 - [~] Phase 5 — Subscriptions verified bidirectionally against `ros2 topic
-      pub`; services (request/reply) and a realistic combined demo not
-      yet done
+      pub` over UDP (including a real one-shot-vs-continuous bug found and
+      fixed); the same protocol wired into QEMU firmware over real serial
+      doesn't yet deliver, not root-caused; services (request/reply) and a
+      realistic combined demo not yet done
 - [ ] Phase 6 — Latency/throughput measurement, fault handling, polish
 
 ## Troubleshooting
