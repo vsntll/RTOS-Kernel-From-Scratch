@@ -321,6 +321,7 @@ host/                        # host-side scripts and live-agent test programs
   live_agent_check.c          # manual: CREATE_CLIENT against a real MicroXRCEAgent
   live_publish_demo.c         # manual: full entity-creation + publish loop against a real agent
   live_subscribe_demo.c       # manual: subscription, driven live by `ros2 topic pub`
+  pty_bridge.py               # debug tool: tees QEMU<->agent serial traffic (see xrce/docs/design.md)
 ```
 
 ## Kernel API (summary)
