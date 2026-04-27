@@ -306,9 +306,10 @@ over the real serial transport.** `uart.c` gained polled RX
 subscriber/datareader for `rt/setpoint` alongside the existing publisher,
 feeding received bytes through `xrce_serial_reader_feed()` and printing
 `setpoint updated: N` when a matching `DATA` submessage decodes. Tested
-against a real agent (via a small Python bidirectional pty relay so both
-QEMU's UART traffic and the human-readable prints could be observed at
-once, since the agent otherwise holds the pty exclusively) -- entity
+against a real agent (via `host/pty_bridge.py`, a small Python
+bidirectional pty relay/tee, so both QEMU's UART traffic and the
+human-readable prints could be observed at once, since the agent
+otherwise holds the pty exclusively) -- entity
 creation succeeds every time (`datareader created` in the agent's log),
 and the agent's own log confirms it reads the published value from DDS
 (`[==>> DDS <<==]`, correct header-less bytes), but no `DATA` submessage
