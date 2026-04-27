@@ -275,7 +275,7 @@ int main(void) {
 
     uint8_t key[4] = {0x52, 0x54, 0x4F, 0x53}; /* "RTOS" */
     xrce_session_t session;
-    xrce_session_init(&session, 0x01, key, 128);
+    xrce_session_init(&session, 0x01, key, 512);
     xrce_serial_reader_init(&g_rx_reader, SERIAL_LOCAL_ADDR, g_rx_payload_buf,
                              sizeof(g_rx_payload_buf));
 
