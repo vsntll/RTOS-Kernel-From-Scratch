@@ -31,9 +31,23 @@ import os
 import pty
 import threading
 import time
+import tty
 
 master_a, slave_a = pty.openpty()  # QEMU's end
 master_b, slave_b = pty.openpty()  # the agent's end
+
+# Critical: pty.openpty() leaves both slaves in the default cooked/canonical
+# mode (ECHO + ICANON + software flow control), not raw passthrough. Found
+# the hard way: with a real agent attached, QEMU's own boot banner showed
+# up echoed back on the *agent* side of the relay -- i.e. this bridge was
+# silently corrupting/duplicating the binary protocol traffic it exists to
+# observe, calling into question every earlier finding about "the agent
+# never sends a DATA submessage" (see xrce/docs/design.md's Phase 5
+# section). tty.setraw() disables all of that -- 8-bit clean passthrough,
+# no echo, no line buffering, no XON/XOFF interception of control-code-like
+# bytes our own framing can legitimately contain.
+tty.setraw(slave_a)
+tty.setraw(slave_b)
 
 print("QEMU_PTY:" + os.ttyname(slave_a), flush=True)
 print("AGENT_PTY:" + os.ttyname(slave_b), flush=True)
