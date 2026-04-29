@@ -249,7 +249,7 @@ attempt using an attribute-style shorthand (`<dds_topic name="..."
 which is exactly the kind of interop detail this project exists to get
 right rather than guess at.
 
-## Phase 5 — Subscriptions (bidirectional communication) -- protocol working over UDP, serial wiring not yet working
+## Phase 5 — Subscriptions (bidirectional communication) -- fully working, both transports
 
 `session.h/c` gained the read/receive half of the protocol: `READ_DATA`
 (ask the agent to start delivering a datareader's samples on a chosen
@@ -300,47 +300,64 @@ this reason). Confirmed after the fix: three sequential
 `ros2 topic pub` calls (values 1, 2, 3) all arrived, in order, over the
 same long-lived subscription.
 
-**Attempted, not yet working: wiring this into `rtos/arm/ros2_demo.c`
-over the real serial transport.** `uart.c` gained polled RX
-(`uart_getc_nonblocking()`), and the firmware now creates a full
-subscriber/datareader for `rt/setpoint` alongside the existing publisher,
-feeding received bytes through `xrce_serial_reader_feed()` and printing
-`setpoint updated: N` when a matching `DATA` submessage decodes. Tested
-against a real agent (via `host/pty_bridge.py`, a small Python
-bidirectional pty relay/tee, so both QEMU's UART traffic and the
-human-readable prints could be observed at once, since the agent
-otherwise holds the pty exclusively) -- entity
-creation succeeds every time (`datareader created` in the agent's log),
-and the agent's own log confirms it reads the published value from DDS
-(`[==>> DDS <<==]`, correct header-less bytes), but no `DATA` submessage
-was ever observed reaching the firmware, checked directly in the raw pty
-traffic. Two contributing-but-not-fully-explaining factors found along
-the way:
-- Re-announcing `READ_DATA` too often (a 5-publish interval, ~170ms under
-  QEMU's fast busy-loop) keeps restarting the agent's internal delivery
-  thread (`DataReader::read()` always calls `stop_reading()` before
-  `start_reading()`), which alone could starve real deliveries. Backed off
-  to a much longer interval (`REANNOUNCE_EVERY_N_PUBLISHES = 200` in
-  `ros2_demo.c`) -- necessary, but not sufficient: delivery still didn't
-  arrive with this change alone.
-- Sending `READ_DATA` exactly once (the alternative extreme) reintroduces
-  the same boot-timing race `CREATE_CLIENT`'s periodic re-announcement
-  exists to solve in the first place (the agent takes a few real seconds
-  to attach to a freshly-allocated pty; a one-time send at boot is easily
-  lost).
+**Also verified over the real serial transport, into real QEMU-booted ARM
+firmware.** `uart.c` gained polled RX (`uart_getc_nonblocking()`), and
+`rtos/arm/ros2_demo.c` creates a full subscriber/datareader for
+`rt/setpoint` alongside the existing publisher, feeding received bytes
+through `xrce_serial_reader_feed()` and printing `setpoint updated: N`
+when a matching `DATA` submessage decodes. A real
+`ros2 topic pub /setpoint std_msgs/msg/Int32 "{data: 4242}" --once`
+against a real, unmodified agent produced exactly
+`setpoint updated: 4242` in the firmware's own UART output -- confirmed
+repeatedly, including with a negative value (`-17`) to check sign
+handling. This is the actual "host sends a command, the RTOS task
+receives it" scenario from the original project brief, running for real
+inside QEMU.
 
-Since the identical `READ_DATA`/`DATA` code, unchanged, works correctly
-and repeatedly over UDP, the protocol implementation itself is not in
-question here -- what's unresolved is specific to this transport/test
-combination (real serial, through a manually-bridged pty pair rather than
-a direct QEMU-to-agent connection). Not root-caused further in this pass;
-a reasonable next step would be tracing the agent's
-`SessionManager::get_endpoint()`/`push_output_submessage()` path for the
-serial transport specifically, or testing with a real (non-emulated)
-serial connection to rule out the pty-bridging setup itself as a factor.
+**This took two rounds of chasing a problem that turned out to be in the
+test tooling, not the implementation -- worth recording in full, since
+"it doesn't work" turned out to be the wrong conclusion twice before it
+was right.** Debugging this needed a way to observe QEMU's raw UART
+traffic *and* have a real agent attached at the same time, which isn't
+otherwise possible (the agent holds its end of the pty exclusively). The
+tool built for that, `host/pty_bridge.py`, is what actually caused both
+false negatives:
 
-Also not yet done: services (request/reply, a different submessage pair
-again), and a `ros2 topic pub`-to-QEMU demo confirmed working end to end.
+1. **The bridge's two intermediate ptys were left in default cooked/echo
+   mode.** `pty.openpty()` doesn't put its ptys in raw mode -- and with a
+   real agent attached through the bridge, QEMU's own boot banner showed
+   up *echoed back* on the agent-facing side of the relay, meaning the
+   bridge was corrupting/duplicating the very binary protocol traffic it
+   existed to observe. (In the earlier no-bridge tests, this specific bug
+   didn't apply -- the agent's own `TermiosAgent::init()` configures raw
+   mode on whichever device it opens directly -- but see point 2 for why
+   those tests still looked like failures.) Fixed with `tty.setraw()` on
+   both pty slaves right after creation.
+2. **Even after fixing the bridge, "grep the log for `setpoint updated`"
+   kept reporting nothing -- because the relay logs one line per
+   `os.read()` call, and `os.read()` doesn't respect message boundaries.**
+   The text `setpoint updated: 4242` really was there, just split across
+   two separate log lines (e.g. `...setpoint u` / `pdated: 4242\r\n...`
+   on the next), which a line-oriented `grep` will never match. Confirmed
+   by reconstructing the full byte stream (concatenating every logged
+   read, not grepping line-by-line) and searching *that* -- the value was
+   present every time, going back to the very first test that was
+   reported as a failure.
+
+Debugged by adding temporary, reverted-before-commit instrumentation on
+both ends to get past assumptions entirely: a few `fprintf` calls in the
+agent's own `Processor::read_data_callback` (built locally via
+`LD_LIBRARY_PATH` override, never touching the system-installed agent
+binary other users/tests rely on) confirmed `push_output_submessage()`
+and the pop-and-send loop were succeeding on the agent's side well before
+the tooling bugs above were found; a temporary per-byte print in
+`ros2_demo.c`'s RX poll loop confirmed the firmware genuinely was
+receiving bytes at the hardware/QEMU level throughout. Both were reverted
+once the real cause (the two bugs above, not the client/agent protocol)
+was confirmed.
+
+Not yet done: services (request/reply, a different submessage pair
+again), and a combined publish+subscribe realistic demo scenario.
 
 ## Later phases
 
