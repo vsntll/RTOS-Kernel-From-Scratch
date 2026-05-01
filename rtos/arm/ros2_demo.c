@@ -1,4 +1,4 @@
-/* Phase 4/5 (ROS2 layer): the actual "RTOS task in QEMU talks to a real
+/* Phase 4/5/6 (ROS2 layer): the actual "RTOS task in QEMU talks to a real
  * agent, both directions" deliverable. Runs the same xrce/ session layer
  * already verified over UDP (host/live_publish_demo.c,
  * host/live_subscribe_demo.c) here instead over UART1, framed with
@@ -7,12 +7,12 @@
  *
  * Publishes an incrementing std_msgs/Int32 on rt/chatter (Phase 4), and
  * subscribes to rt/setpoint (Phase 5): a real `ros2 topic pub
- * /setpoint std_msgs/msg/Int32 "{data: N}"` updates this firmware's
- * g_setpoint variable, printed over UART -- the "host sends a command,
- * the RTOS task receives and acts on it" scenario from the original
- * project brief. "Acts on it" here is printing the new value; there's no
- * simulated motor/LED output to actually drive on this bare QEMU target,
- * but the receive-and-react path is the same either way.
+ * /setpoint std_msgs/msg/Int32 "{data: N}"` prints the new value over
+ * UART -- the "host sends a command, the RTOS task receives and acts on
+ * it" scenario from the original project brief. It also immediately
+ * echoes the value back out on rt/pong (Phase 6), which is what
+ * `host/bench_latency.c` uses to measure real host<->RTOS round-trip
+ * latency through this exact firmware, not a simulated stand-in for it.
  *
  * No RTOS task/scheduler involvement here -- this is a plain sequential
  * main(), like Phase 1/3's demos before Phase 8 added preemption; SysTick
@@ -50,13 +50,10 @@
  * in the agent's own Reader.hpp) -- re-announcing too often (every ~170ms,
  * what a 5-publish interval worked out to under QEMU's fast loop) keeps
  * killing and restarting that thread. This value gives it a real window to
- * stay alive between restarts. That said: this alone did NOT get live
- * setpoint delivery working end to end over the real serial transport in
- * testing -- see xrce/docs/design.md's Phase 5 section for the honest,
- * still-open status of that specific combination (the READ_DATA/DATA
- * protocol itself is fully verified correct and working over UDP with
- * continuous multi-sample delivery; this QEMU-serial wiring has a
- * separate, unresolved delivery issue). */
+ * stay alive between restarts, confirmed by testing: setpoint delivery over
+ * the real serial transport works reliably at this interval (see
+ * xrce/docs/design.md's Phase 5 section for the full story, including two
+ * debugging-tool bugs that made it look broken before this was found). */
 #define REANNOUNCE_EVERY_N_PUBLISHES 200
 
 /* Unverified real-world duration under QEMU TCG emulation (see main.c's
@@ -75,6 +72,17 @@
 
 static xrce_serial_reader_t g_rx_reader;
 static uint8_t g_rx_payload_buf[256];
+
+static xrce_object_id_t g_participant_id;
+static xrce_object_id_t g_topic_id;
+static xrce_object_id_t g_publisher_id;
+static xrce_object_id_t g_datawriter_id;
+static xrce_object_id_t g_cmd_topic_id;
+static xrce_object_id_t g_subscriber_id;
+static xrce_object_id_t g_datareader_id;
+static xrce_object_id_t g_pong_topic_id;
+static xrce_object_id_t g_pong_datawriter_id;
+static xrce_session_t *g_session; /* handle_incoming_frame() needs this to echo a pong */
 
 static void uart_put_uint(uint32_t v) {
     char digits[10];
@@ -101,11 +109,15 @@ static void uart_put_int(int32_t v) {
     }
 }
 
+static void send_frame(const uint8_t *payload, size_t len); /* defined below */
+
 /* Handles one fully-decoded incoming frame: if it's a DATA submessage from
- * our datareader, decode it as a raw (header-less -- see session.h) int32
- * and update g_setpoint. Anything else (STATUS replies to our own
- * CREATEs, etc.) is silently ignored -- this demo doesn't correlate
- * replies to requests. */
+ * our datareader, decode it as a raw (header-less -- see session.h) int32,
+ * print it, and immediately echo it back out on rt/pong (Phase 6) --
+ * that echo is what host/bench_latency.c times to measure real
+ * host<->RTOS round-trip latency through this exact firmware. Anything
+ * else (STATUS replies to our own CREATEs, etc.) is silently ignored --
+ * this demo doesn't correlate replies to requests. */
 static void handle_incoming_frame(xrce_object_id_t datareader_id) {
     xrce_object_id_t from_id;
     const uint8_t *sample;
@@ -122,6 +134,11 @@ static void handle_incoming_frame(xrce_object_id_t datareader_id) {
     uart_puts("setpoint updated: ");
     uart_put_int(setpoint);
     uart_puts("\r\n");
+
+    uint8_t msg[64];
+    size_t len = xrce_session_build_write_data(g_session, BEST_EFFORT_STREAM_0,
+                                                g_pong_datawriter_id, sample, 4, msg, sizeof(msg));
+    send_frame(msg, len);
 }
 
 /* Paces the demo (same busy-loop role Phase 8's demo already used) while
@@ -168,14 +185,6 @@ static void send_frame(const uint8_t *payload, size_t len) {
         uart_putc((char)frame[i]);
     }
 }
-
-static xrce_object_id_t g_participant_id;
-static xrce_object_id_t g_topic_id;
-static xrce_object_id_t g_publisher_id;
-static xrce_object_id_t g_datawriter_id;
-static xrce_object_id_t g_cmd_topic_id;
-static xrce_object_id_t g_subscriber_id;
-static xrce_object_id_t g_datareader_id;
 
 static void announce_entities(xrce_session_t *session) {
     uint8_t msg[192];
@@ -267,6 +276,30 @@ static void announce_entities(xrce_session_t *session) {
                                         BEST_EFFORT_STREAM_0, msg, sizeof(msg));
     send_frame(msg, len);
     pace_and_poll_rx(g_datareader_id, PACE_BUSY_LOOPS);
+
+    /* Phase 6: rt/pong, echoed by handle_incoming_frame() -- what
+     * host/bench_latency.c times for real host<->RTOS round-trip latency. */
+    g_pong_topic_id = xrce_object_id(0x003, XRCE_OBJK_TOPIC);
+    uart_puts("-> CREATE topic (rt/pong)\r\n");
+    len = xrce_session_build_create_xml(session, BEST_EFFORT_STREAM_0, g_pong_topic_id,
+                                         g_participant_id,
+                                         "<dds><topic><name>rt/pong</name>"
+                                         "<dataType>std_msgs::msg::dds_::Int32_</dataType></topic></dds>",
+                                         msg, sizeof(msg));
+    send_frame(msg, len);
+    pace_and_poll_rx(g_datareader_id, PACE_BUSY_LOOPS);
+
+    g_pong_datawriter_id = xrce_object_id(0x002, XRCE_OBJK_DATAWRITER);
+    uart_puts("-> CREATE datawriter (rt/pong)\r\n");
+    len = xrce_session_build_create_xml(session, BEST_EFFORT_STREAM_0, g_pong_datawriter_id,
+                                         g_publisher_id,
+                                         "<dds><data_writer><topic><kind>NO_KEY</kind>"
+                                         "<name>rt/pong</name>"
+                                         "<dataType>std_msgs::msg::dds_::Int32_</dataType>"
+                                         "</topic></data_writer></dds>",
+                                         msg, sizeof(msg));
+    send_frame(msg, len);
+    pace_and_poll_rx(g_datareader_id, PACE_BUSY_LOOPS);
 }
 
 int main(void) {
@@ -278,6 +311,7 @@ int main(void) {
     xrce_session_init(&session, 0x01, key, 512);
     xrce_serial_reader_init(&g_rx_reader, SERIAL_LOCAL_ADDR, g_rx_payload_buf,
                              sizeof(g_rx_payload_buf));
+    g_session = &session; /* handle_incoming_frame() echoes through this */
 
     announce_entities(&session);
 
