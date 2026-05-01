@@ -694,7 +694,7 @@ make examples
       <li class="phase"><span class="n">P2</span><span class="t">CDR serialization</span><span class="d">Int32 / String / Imu, alignment-aware — unit-tested</span></li>
       <li class="phase"><span class="n">P3</span><span class="t">Session + entity creation + WRITE_DATA</span><span class="d">CREATE_CLIENT, CREATE, WRITE_DATA — unit-tested</span></li>
       <li class="phase"><span class="n">P4</span><span class="t">Host-side bridge — working end to end</span><span class="d"><code>ros2 topic echo</code> decodes clean data, over UDP and real serial from QEMU</span></li>
-      <li class="phase stretch"><span class="n">P5</span><span class="t">Subscriptions — working over UDP, serial wiring open</span><span class="d">READ_DATA/DATA driven live by a real <code>ros2 topic pub</code>; QEMU-serial delivery not yet resolved</span></li>
+      <li class="phase"><span class="n">P5</span><span class="t">Subscriptions — bidirectional, both transports</span><span class="d">READ_DATA/DATA driven live by a real <code>ros2 topic pub</code>, over UDP and real serial into QEMU firmware</span></li>
     </ul>
 
     <h3 style="margin-top:30px;">Verified against a real agent, not just its own tests</h3>
@@ -716,8 +716,12 @@ make examples
         <p>A subscription (participant/topic/subscriber/datareader + <code>READ_DATA</code>) against the same real agent, driven by a plain <code>ros2 topic pub /cmd std_msgs/msg/Int32 "{data: 99}" --once</code> — nothing from this project on the publishing end. This project's client printed <code>received /cmd data=99</code>. <code>DATA</code>'s sample bytes turned out to be header-less too, the mirror image of the WRITE_DATA fix above. Another real bug found the same way: <code>READ_DATA</code> defaulted to a one-shot read (the agent treats an omitted delivery control as <code>max_samples(1)</code>, not unlimited) — the first value arrived, the second silently didn't, until fixed to request <code>max_samples = 0xFFFF</code> explicitly.</p>
       </div>
       <div class="note">
-        <div class="tag">Honestly not working yet: subscriptions over real serial</div>
-        <p>Wiring the same subscription into the QEMU firmware over the actual serial transport (not UDP) doesn't deliver data yet, unlike everything else in this project. Entity creation succeeds and the agent's own log confirms it reads the published value from DDS, but no <code>DATA</code> submessage was ever observed reaching the firmware in testing. Since the identical code works correctly over UDP, this looks like a transport/test-setup-specific issue rather than a protocol bug — but it isn't root-caused. Stated plainly rather than left implicit; see <code>xrce/docs/design.md</code>.</p>
+        <div class="tag">Same subscription, over real serial into QEMU firmware</div>
+        <p><code>ros2 topic pub /setpoint std_msgs/msg/Int32 "{data: 4242}" --once</code> against a real agent produced exactly <code>setpoint updated: 4242</code> in the QEMU-booted firmware's own UART output — confirmed repeatedly, including a negative value to check sign handling.</p>
+      </div>
+      <div class="note">
+        <div class="tag">When the debugging tool is the bug</div>
+        <p>Getting there took chasing what looked like a real delivery failure through two rounds — both turned out to be bugs in the debug tooling, not the implementation: a relay pty left in default echo mode was corrupting the very binary traffic it existed to observe, and a log search missed text that really was there, just split across two log lines by the relay's read boundaries. Reconstructing the full byte stream instead of grepping line-by-line found the correct value present from the very first "failing" test. Full account in <code>xrce/docs/design.md</code>.</p>
       </div>
     </div>
 
