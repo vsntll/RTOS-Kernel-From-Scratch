@@ -357,12 +357,108 @@ once the real cause (the two bugs above, not the client/agent protocol)
 was confirmed.
 
 Not yet done: services (request/reply, a different submessage pair
-again), and a combined publish+subscribe realistic demo scenario.
+again).
+
+## Phase 6 — Realistic demo, latency/throughput, fault handling, writeup
+
+**Realistic combined demo:** `ros2_demo.c` now echoes every received
+`rt/setpoint` value back out on a third topic, `rt/pong`, immediately
+after printing it. This isn't a separate feature -- it's what makes an
+honest latency measurement possible at all: `host/bench_latency.c`
+publishes an incrementing value on `rt/setpoint` and times how long until
+the matching value comes back on `rt/pong`, so the measured latency is the
+real round trip through the actual firmware (agent -> DDS -> agent ->
+real serial framing -> QEMU's UART -> the firmware's own poll loop ->
+decode -> re-encode -> back through the same chain), not something
+computed from QEMU's own sense of time -- see `rtos/arm/main.c`'s
+`SYSTICK_RELOAD` comment for why on-device timestamps specifically
+wouldn't be trustworthy here (the RCC/PLL is never configured, so the
+core clock is whatever the reset default happens to be).
+
+**Latency**, one round trip at a time (paced naturally by each round
+trip's own network+DDS+serial delay, which is what a real, non-bursty
+publish/subscribe workload looks like): 14/15 round trips completed in one
+run (the first attempt in a fresh session routinely times out -- DDS
+discovery/matching for just-created entities isn't instant, see the burst
+note below), with
+`min=4.33ms  p50=6.50ms  mean=6.69ms  p95=12.46ms  max=12.46ms`.
+Single-digit milliseconds end to end, through two independent agent
+processes (one bridging QEMU over serial, one bridging the benchmark tool
+over UDP, both into the same DDS domain) -- not a number to over-index on
+precisely (it depends on host load, QEMU's emulation speed, and this
+demo's own busy-loop pacing), but the right order of magnitude for a
+best-effort, non-realtime-tuned link like this one.
+
+**Throughput/loss under a true burst** (`host/bench_latency.c ... burst
+<n>`, firing `n` pings back-to-back with no per-message wait, after a
+short settle delay to let DDS discovery finish first -- without that
+delay, a burst run confounds discovery latency with actual loss and
+reports 100% loss regardless of `n`, which is a discovery-timing artifact,
+not a throughput measurement): a burst of 5 lost 40% (2/5), a burst of 30
+lost 80% (6/30). This is a **real, expected characteristic of this
+specific implementation**, not a bug to fix: `uart_getc_nonblocking()` is
+polled, not interrupt-driven, and is only ever drained inside
+`pace_and_poll_rx()` between other work (building the next outgoing
+message, re-announcing, etc.) -- there's no hardware or software FIFO
+absorbing a burst that arrives faster than the poll loop gets back around
+to checking. A real deployment needing to survive bursts would need
+either interrupt-driven RX with a real ring buffer, or to lean on the
+protocol's own reliable-stream retransmission (Phase 3+ notes explain why
+that's a separate layer, not implemented here) rather than best-effort
+delivery. Stated plainly: this link is fine for a steady trickle of
+commands/telemetry, not for bursty traffic.
+
+**Fault handling, tested directly rather than assumed:**
+- **Agent disconnect/reconnect:** killed the serial agent process while
+  QEMU/the firmware kept running untouched, waited, then started a fresh
+  agent process on the same device. All entities re-appeared in the new
+  agent's log (`created` x9) via the existing periodic re-announcement --
+  a mechanism originally built to solve the boot-timing race (Phase 4/5)
+  turns out to also be exactly what's needed for agent-restart recovery,
+  with no firmware restart and no code change required. Confirmed
+  functionally recovered, not just entity-recreated, by running the
+  latency benchmark immediately after and getting real round trips back.
+- **Malformed/corrupted bytes:** covered at the framing layer already --
+  `xrce/tests/test_serial_transport.c`'s corruption/truncation/resync
+  cases (Phase 1) are exactly this, and apply here unchanged since this
+  demo uses the same `xrce_serial_reader_feed()` unmodified.
+- **RTOS task crash mid-publish:** doesn't apply as originally framed --
+  `ros2_demo.c` has no real task/scheduler (see its own header comment;
+  `kernel_arm.c`/`context_switch.s` are linked in only to satisfy
+  `startup.s`'s vector table, never exercised). What was actually tested:
+  killing QEMU itself mid-session leaves the agent process running,
+  unharmed, simply timing out further reads from a now-dead pty -- no
+  hang, no crash on the host side.
+
+**Known limitations vs. real micro-ROS**, stated plainly rather than left
+implicit:
+- No reliable streams (heartbeat/acknack retransmission) -- everything
+  here is best-effort, by design (see `xrce/include/xrce/session.h`'s
+  header comment); real micro-ROS supports both.
+- No services (request/reply) -- a real, different submessage pair
+  (`REQUESTER`/`REPLIER` object kinds), not implemented.
+- No real type introspection -- topics are declared with a bare
+  `dataType` name string via XML, not an XTypes `TypeObject`/generated
+  typesupport. Works for the fixed, hand-picked types this project
+  actually uses (`std_msgs/Int32`, tested; `std_msgs/String` and
+  `sensor_msgs/Imu` at the CDR layer only, Phase 2), but wouldn't
+  automatically support an arbitrary new ROS2 message type the way a real
+  rosidl-generated client does.
+- No multi-node support -- one fixed client key, one fixed set of
+  hardcoded object ids per demo; running two of these at once would need
+  distinct keys/ids, not something this project's demos parametrize.
+- Polled UART RX, no interrupt/FIFO -- see the throughput section above.
+- No on-device reply parsing/correlation -- `ros2_demo.c` never reads
+  `STATUS`/`STATUS_AGENT` replies to its own requests; it re-announces
+  blindly on a timer instead of retrying based on an actual failure
+  signal. Works, but a real client would do better.
+- QEMU's core clock is uncalibrated (RCC/PLL never configured) -- ticks
+  and busy-loop counts are not comparable to real wall-clock time,
+  documented at each of the several places in this codebase where it
+  matters rather than silently assumed away.
 
 ## Later phases
 
-Not started (services/request-reply, a realistic combined publish+
-subscribe demo scenario, multi-node, latency/fault-handling writeup).
-Tracked at a high level in the top-level project plan; this file gets a
-new dated section per phase as it actually lands, same convention as
-`rtos/docs/design.md`.
+Not started (services/request-reply, multi-node). Tracked at a high level
+in the top-level project plan; this file gets a new dated section per
+phase as it actually lands, same convention as `rtos/docs/design.md`.
