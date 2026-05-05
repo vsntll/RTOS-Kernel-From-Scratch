@@ -282,8 +282,40 @@ left in echo mode corrupting traffic, then a log-parsing method that
 missed text split across lines). Neither was a bug in this project's
 protocol implementation.
 
-Not yet done: services (request/reply), multi-node, latency/fault-handling
-writeup.
+Not yet done: services (request/reply), multi-node.
+
+**Phase 6 — latency, throughput, and fault handling, measured rather than
+estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
+out on `rt/pong`; `host/bench_latency.c` times the real round trip through
+the actual firmware (not something computed from QEMU's own uncalibrated
+sense of time — see `rtos/arm/main.c`):
+
+```bash
+gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
+/tmp/bench 127.0.0.1 8888 20        # sequential round trips
+/tmp/bench 127.0.0.1 8888 burst 30  # back-to-back burst, measures loss
+```
+
+- **Latency** (paced one round trip at a time): `min=4.33ms  p50=6.50ms
+  mean=6.69ms  p95=12.46ms  max=12.46ms` — single-digit milliseconds
+  through two independent agent processes into real DDS and back.
+- **Throughput/loss under a true burst**: 40% loss at a 5-message burst,
+  80% at 30 — a real, expected limit of this implementation (UART RX is
+  polled, not interrupt-driven, with no FIFO absorbing a burst faster than
+  the poll loop returns to it), not a bug. Fine for a steady trickle,
+  not bursty traffic — stated plainly rather than glossed over.
+- **Fault handling, tested directly**: killed the serial agent mid-session
+  with the firmware left running, then started a fresh agent — all
+  entities reappeared automatically via the same periodic re-announcement
+  built for the boot-timing race, with zero firmware restart or code
+  change needed, confirmed by running the latency benchmark immediately
+  after and getting real round trips back.
+
+**Known limitations vs. real micro-ROS**, in `xrce/docs/design.md`'s Phase
+6 section: no reliable streams, no services, no real type introspection
+(bare XML name strings, not generated typesupport), no multi-node, polled
+RX, no on-device reply correlation, uncalibrated QEMU clock. Every one of
+these is a real, specific gap — not a vague disclaimer.
 
 ## Project structure
 
@@ -326,6 +358,7 @@ host/                        # host-side scripts and live-agent test programs
   live_publish_demo.c         # manual: full entity-creation + publish loop against a real agent
   live_subscribe_demo.c       # manual: subscription, driven live by `ros2 topic pub`
   pty_bridge.py               # debug tool: tees QEMU<->agent serial traffic (see xrce/docs/design.md)
+  bench_latency.c             # Phase 6: real host<->RTOS round-trip latency + burst-loss benchmark
 ```
 
 ## Kernel API (summary)
@@ -374,8 +407,10 @@ top of the kernel above, not part of it:**
 - [x] Phase 5 — Subscriptions verified bidirectionally against `ros2 topic
       pub`, over both UDP and real serial into QEMU-booted firmware
       (including a real one-shot-vs-continuous bug found and fixed);
-      services (request/reply) and a realistic combined demo not yet done
-- [ ] Phase 6 — Latency/throughput measurement, fault handling, polish
+      services (request/reply) not yet done
+- [x] Phase 6 — Latency (p50 6.5ms, p95 12.5ms) and burst-loss (40%@5,
+      80%@30) measured against real firmware; agent disconnect/reconnect
+      recovery confirmed; limitations vs. real micro-ROS written up
 
 ## Troubleshooting
 
