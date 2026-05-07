@@ -695,6 +695,7 @@ make examples
       <li class="phase"><span class="n">P3</span><span class="t">Session + entity creation + WRITE_DATA</span><span class="d">CREATE_CLIENT, CREATE, WRITE_DATA — unit-tested</span></li>
       <li class="phase"><span class="n">P4</span><span class="t">Host-side bridge — working end to end</span><span class="d"><code>ros2 topic echo</code> decodes clean data, over UDP and real serial from QEMU</span></li>
       <li class="phase"><span class="n">P5</span><span class="t">Subscriptions — bidirectional, both transports</span><span class="d">READ_DATA/DATA driven live by a real <code>ros2 topic pub</code>, over UDP and real serial into QEMU firmware</span></li>
+      <li class="phase"><span class="n">P6</span><span class="t">Latency, throughput, fault handling — measured</span><span class="d">real round-trip latency + burst-loss numbers against actual firmware; agent-restart recovery confirmed</span></li>
     </ul>
 
     <h3 style="margin-top:30px;">Verified against a real agent, not just its own tests</h3>
@@ -723,6 +724,14 @@ make examples
         <div class="tag">When the debugging tool is the bug</div>
         <p>Getting there took chasing what looked like a real delivery failure through two rounds — both turned out to be bugs in the debug tooling, not the implementation: a relay pty left in default echo mode was corrupting the very binary traffic it existed to observe, and a log search missed text that really was there, just split across two log lines by the relay's read boundaries. Reconstructing the full byte stream instead of grepping line-by-line found the correct value present from the very first "failing" test. Full account in <code>xrce/docs/design.md</code>.</p>
       </div>
+      <div class="note">
+        <div class="tag">Latency and throughput, measured not estimated</div>
+        <p>The firmware echoes every received setpoint back out on <code>rt/pong</code>; <code>host/bench_latency.c</code> times the real round trip through the actual firmware. Paced one at a time: <code>min=4.33ms p50=6.50ms mean=6.69ms p95=12.46ms max=12.46ms</code>. Fired as a true back-to-back burst instead: 40% loss at 5 messages, 80% at 30 — a real limit of this implementation (UART RX is polled, not interrupt-driven, no FIFO), stated plainly rather than glossed over.</p>
+      </div>
+      <div class="note">
+        <div class="tag">Fault handling, tested directly</div>
+        <p>Killed the serial agent process mid-session with the firmware left running untouched, then started a fresh agent on the same device: every entity reappeared automatically via the same periodic re-announcement built for the boot-timing race — no firmware restart, no code change. Confirmed functionally recovered (not just entity-recreated) by running the latency benchmark immediately after and getting real round trips back.</p>
+      </div>
     </div>
 
     <h3 style="margin-top:30px;">Try it</h3>
@@ -743,7 +752,12 @@ MicroXRCEAgent serial -D /dev/pts/N -b 115200   <span class="dim"># N printed by
 <span class="dim"># subscriptions, the other direction:</span>
 gcc -Ixrce/include host/live_subscribe_demo.c xrce/build/libxrce.a -o /tmp/sub
 /tmp/sub 127.0.0.1 8888
-<span class="dim"># separately: ros2 topic pub /cmd std_msgs/msg/Int32 "{data: 99}" --once</span></pre>
+<span class="dim"># separately: ros2 topic pub /cmd std_msgs/msg/Int32 "{data: 99}" --once</span>
+
+<span class="dim"># latency/throughput against the real firmware (with ros2_demo.c running):</span>
+gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
+/tmp/bench 127.0.0.1 8888 20          <span class="dim"># sequential round trips</span>
+/tmp/bench 127.0.0.1 8888 burst 30    <span class="dim"># back-to-back burst, measures loss</span></pre>
   </div>
 </section>
 
