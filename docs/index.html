@@ -499,13 +499,50 @@
     92% { opacity: 1; }
     100% { top: calc(100% - 8px); opacity: 0; }
   }
+
+  /* ---------- easter eggs ---------- */
+  body.egg-panic .scope { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  body.egg-panic .playhead { background: var(--accent); }
+  body.egg-panic .seg.blocked { opacity: 1; }
+  .egg-toast {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    max-width: 320px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    box-shadow: var(--shadow);
+    padding: 12px 14px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.76rem;
+    line-height: 1.5;
+    color: var(--ink-dim);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    pointer-events: none;
+    z-index: 50;
+  }
+  .egg-toast.show { opacity: 1; transform: translateY(0); }
+  .egg-toast .t1, .egg-toast .t2 { display: block; }
+  .egg-toast .t1 { color: var(--accent); font-weight: 600; margin-bottom: 4px; }
+  .egg-toast .t2 { color: var(--accent-2); font-weight: 600; }
+  .egg-toast.resolved .t1 { display: none; }
+  .egg-toast:not(.resolved) .t2 { display: none; }
+  .brand-mark { transition: transform 0.15s ease; }
+  .brand:active .brand-mark { transform: scale(0.8) rotate(90deg); }
 </style>
 </head>
 <body>
+<!--
+  task_spawn("reader", read_source, NULL, PRIO_CURIOUS);
+  if you're in here: everything below the fold is real, checked against
+  a real MicroXRCEAgent, logs and all. try the konami code on this page.
+-->
 
 <div class="topbar">
   <div class="topbar-inner">
-    <a class="brand" href="#top"><span class="brand-mark"></span>rtos-kernel-from-scratch</a>
+    <a class="brand" href="#top" title="kernel panic (just kidding)"><span class="brand-mark"></span>rtos-kernel-from-scratch</a>
     <nav>
       <a href="#overview">overview</a>
       <a href="#architecture">architecture</a>
@@ -894,6 +931,11 @@ gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
   </div>
 </footer>
 
+<div class="egg-toast" id="eggToast" role="status" aria-live="polite">
+  <span class="t1">⚠ PRIORITY INVERSION — TASK_C (prio 1) holds the mutex TASK_A (prio 3) is blocked on</span>
+  <span class="t2">✓ priority inheritance applied — TASK_C boosted, mutex released, resolved</span>
+</div>
+
 <script>
   (function () {
     var root = document.documentElement;
@@ -914,6 +956,46 @@ gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
       var next = current === 'dark' ? 'light' : current === 'light' ? null : 'dark';
       if (next) { localStorage.setItem('theme', next); } else { localStorage.removeItem('theme'); }
       apply(next);
+    });
+  })();
+
+  (function () {
+    console.log('%c rtos-kernel-from-scratch ', 'background:#b9722a;color:#fff;font-family:monospace;padding:3px 8px;border-radius:2px;');
+    console.log('%cscheduler_run() started. you found devtools — hi.\nsource: https://github.com/vsntll/RTOS-Kernel-From-Scratch', 'color:#8891a0;font-family:monospace;');
+  })();
+
+  (function () {
+    var sequence = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+    var pos = 0;
+    var toast = document.getElementById('eggToast');
+    var timers = [];
+
+    function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+
+    function runInversionDemo() {
+      clearTimers();
+      document.body.classList.add('egg-panic');
+      toast.classList.remove('resolved');
+      toast.classList.add('show');
+      timers.push(setTimeout(function () {
+        toast.classList.add('resolved');
+      }, 1800));
+      timers.push(setTimeout(function () {
+        toast.classList.remove('show');
+        document.body.classList.remove('egg-panic');
+      }, 4200));
+      timers.push(setTimeout(function () {
+        toast.classList.remove('resolved');
+      }, 4500));
+    }
+
+    document.addEventListener('keydown', function (e) {
+      var key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      pos = key === sequence[pos] ? pos + 1 : (key === sequence[0] ? 1 : 0);
+      if (pos === sequence.length) {
+        pos = 0;
+        runInversionDemo();
+      }
     });
   })();
 </script>
