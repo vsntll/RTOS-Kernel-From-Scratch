@@ -311,6 +311,64 @@
   .legend i.ready { border: 1px dashed var(--line-strong); }
   .legend i.blocked { background: repeating-linear-gradient(135deg, var(--line-strong) 0, var(--line-strong) 1px, transparent 1px, transparent 4px); opacity: 0.6; }
 
+  /* ---------- overview (pipeline + two-part cards) ---------- */
+  .pipeline { margin: 32px 0 8px; }
+  .pipeline-track { display: flex; align-items: center; }
+  .pnode {
+    flex: none;
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+    text-align: center;
+    min-width: 128px;
+  }
+  .pn-label { display: block; font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; font-weight: 600; color: var(--ink); letter-spacing: 0.03em; }
+  .pn-sub { display: block; font-family: "IBM Plex Mono", monospace; font-size: 0.64rem; color: var(--ink-faint); margin-top: 4px; }
+  .pline { flex: 1; height: 2px; background: var(--line); position: relative; margin: 0 4px; min-width: 28px; }
+  .pdot { position: absolute; top: -3px; left: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-2); animation: flow 2.4s linear infinite; }
+  @keyframes flow {
+    0% { left: 0; opacity: 0; }
+    8% { opacity: 1; }
+    92% { opacity: 1; }
+    100% { left: calc(100% - 8px); opacity: 0; }
+  }
+
+  .overview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 28px; }
+  .overview-card { display: flex; gap: 16px; padding: 20px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
+  .oc-icon {
+    flex: none;
+    width: 52px;
+    height: 52px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px;
+  }
+  .oc-icon .bar { width: 6px; background: var(--accent); transform-origin: bottom; animation: barpulse 1.8s ease-in-out infinite; }
+  .oc-icon .bar:nth-child(1) { height: 14px; animation-delay: 0s; }
+  .oc-icon .bar:nth-child(2) { height: 26px; animation-delay: 0.3s; }
+  .oc-icon .bar:nth-child(3) { height: 18px; animation-delay: 0.6s; }
+  @keyframes barpulse {
+    0%, 100% { transform: scaleY(0.5); opacity: 0.55; }
+    50% { transform: scaleY(1); opacity: 1; }
+  }
+  .oc-icon.ros { align-items: center; }
+  .oc-icon.ros .track { position: relative; width: 100%; height: 2px; background: var(--line-strong); }
+  .oc-icon.ros .dot { position: absolute; top: -3px; left: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-2); animation: flow 1.8s linear infinite; }
+  .oc-body h3 { margin: 4px 0 8px; }
+  .oc-body p { margin: 0 0 12px; font-size: 0.9rem; }
+  .oc-stats { font-family: "IBM Plex Mono", monospace; font-size: 0.7rem; letter-spacing: 0.03em; color: var(--ink-faint); margin-bottom: 10px; }
+  .oc-link { font-family: "IBM Plex Mono", monospace; font-size: 0.82rem; text-decoration: none; color: var(--accent); }
+  .oc-link:hover { text-decoration: underline; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pdot, .oc-icon .bar, .oc-icon.ros .dot { animation: none; }
+  }
+
   /* ---------- sections ---------- */
   section { padding: 52px 0; border-top: 1px solid var(--line); }
   section.no-rule { border-top: none; }
@@ -429,6 +487,17 @@
     .phase .d { margin-left: 0; text-align: left; max-width: none; }
     .topbar nav { display: none; }
     .track-name { width: 40px; font-size: 0.68rem; }
+    .overview-grid { grid-template-columns: 1fr; }
+    .pipeline-track { flex-direction: column; align-items: stretch; }
+    .pnode { min-width: 0; }
+    .pline { width: 2px; height: 26px; margin: 2px auto; }
+    .pdot { left: -3px; top: 0; animation-name: flowV; }
+  }
+  @keyframes flowV {
+    0% { top: 0; opacity: 0; }
+    8% { opacity: 1; }
+    92% { opacity: 1; }
+    100% { top: calc(100% - 8px); opacity: 0; }
   }
 </style>
 </head>
@@ -438,6 +507,7 @@
   <div class="topbar-inner">
     <a class="brand" href="#top"><span class="brand-mark"></span>rtos-kernel-from-scratch</a>
     <nav>
+      <a href="#overview">overview</a>
       <a href="#architecture">architecture</a>
       <a href="#roadmap">roadmap</a>
       <a href="#api">api</a>
@@ -458,13 +528,13 @@
     fix for it, and blocking synchronization primitives — built up in eight testable phases,
     running host-native on <code>ucontext.h</code> and, in Phase 8, on real Cortex-M4 assembly
     under QEMU. On top of that port, a Micro XRCE-DDS client layer lets RTOS tasks publish into
-    a real ROS2 graph through a real, unmodified agent — <a href="#ros2">see below</a>.
+    a real ROS2 graph through a real, unmodified agent — <a href="#overview">see how it fits together</a>.
   </p>
   <div class="cta-row">
     <a class="btn primary" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch">View source →</a>
+    <a class="btn" href="#overview">See both parts ↓</a>
     <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/docs/design.md">Read the design doc</a>
     <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/arm/README.md">Cortex-M4 port ↗</a>
-    <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/xrce/docs/design.md">ROS2 client layer ↗</a>
   </div>
 
   <div class="scope" aria-hidden="true">
@@ -511,7 +581,57 @@
   </div>
 </div>
 
-<section class="no-rule" id="why">
+<section class="no-rule" id="overview">
+  <div class="wrap">
+    <div class="label" style="margin-bottom:8px;">TWO PARTS, ONE SYSTEM</div>
+    <h2 style="font-size:1.6rem;">What's actually here, at a glance</h2>
+    <p class="lede" style="margin-top:10px;">
+      A kernel that schedules tasks, and a client layer that lets those tasks talk to ROS2 —
+      built as two separate, independently-testable pieces, then wired together on real
+      Cortex-M4 hardware under QEMU. The diagram below is the whole shape of it; everything
+      past this point (§1–§9) is the detail behind each box.
+    </p>
+
+    <div class="pipeline" aria-hidden="true">
+      <div class="pipeline-track">
+        <div class="pnode"><span class="pn-label">RTOS KERNEL</span><span class="pn-sub">tasks · scheduler · mutex</span></div>
+        <div class="pline"><span class="pdot"></span></div>
+        <div class="pnode"><span class="pn-label">XRCE CLIENT</span><span class="pn-sub">serial / UDP · CDR</span></div>
+        <div class="pline"><span class="pdot" style="animation-delay:1.2s"></span></div>
+        <div class="pnode"><span class="pn-label">ROS2 AGENT</span><span class="pn-sub">real · unmodified</span></div>
+      </div>
+    </div>
+
+    <div class="overview-grid">
+      <div class="overview-card">
+        <div class="oc-icon" aria-hidden="true"><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
+        <div class="oc-body">
+          <div class="label" style="color:var(--accent);">PART 1 · §1–§8</div>
+          <h3>RTOS Kernel</h3>
+          <p>A preemptive, priority-based scheduler built from first principles in C — task structs,
+          context switching, priority inheritance, and blocking sync primitives — running host-native
+          and on real Cortex-M4 assembly.</p>
+          <div class="oc-stats">8 / 8 phases complete · host-native + Cortex-M4</div>
+          <a class="oc-link" href="#why">Kernel details ↓</a>
+        </div>
+      </div>
+      <div class="overview-card">
+        <div class="oc-icon ros" aria-hidden="true"><span class="track"><span class="dot"></span></span></div>
+        <div class="oc-body">
+          <div class="label" style="color:var(--accent-2);">PART 2 · §9</div>
+          <h3>ROS2 client layer</h3>
+          <p>A Micro XRCE-DDS client on top of the kernel that speaks the real wire protocol —
+          verified bidirectionally against an unmodified <code>MicroXRCEAgent</code>, with measured
+          latency, throughput, and fault-recovery numbers.</p>
+          <div class="oc-stats">7 / 7 phases complete · pub + sub, both transports</div>
+          <a class="oc-link" href="#ros2">ROS2 layer details ↓</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="why">
   <div class="wrap">
     <div class="section-head"><span class="num">§1</span><h2>Why it exists</h2></div>
     <p class="lede">
