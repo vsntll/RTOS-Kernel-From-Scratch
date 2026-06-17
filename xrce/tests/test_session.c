@@ -209,6 +209,47 @@ static void case_create_reply_parsing(void) {
     assert(xrce_session_parse_create_reply(ok_reply, sizeof(ok_reply)));
 }
 
+/* Byte-exact like case_create_client_byte_exact: DELETE is small/fixed-size
+ * enough (just a BaseObjectRequest, no XML -- see session.h) to hand-compute
+ * in full, ground-truthed against uxr_buffer_delete_entity()'s "request_id +
+ * object_id, no padding" payload. */
+static void case_delete_byte_exact(void) {
+    uint8_t key[4] = {7, 7, 7, 7};
+    xrce_session_t s;
+    xrce_session_init(&s, 0x05, key, 512);
+
+    xrce_object_id_t topic_id = xrce_object_id(0x100, XRCE_OBJK_TOPIC);
+    uint8_t buf[32];
+    size_t len = xrce_session_build_delete(&s, 1, topic_id, buf, sizeof(buf));
+
+    static const uint8_t expected[16] = {
+        0x05, 0x01, 0x00, 0x00, 0x07, 0x07, 0x07, 0x07, /* header */
+        0x03, 0x01, 0x04, 0x00,                         /* subheader: DELETE, LE, len=4 */
+        0x00, 0x09,                                     /* request_id (BE, first == 9) */
+        0x10, 0x02,                                     /* object_id: id=0x100, kind=TOPIC */
+    };
+    assert(len == sizeof(expected));
+    assert(memcmp(buf, expected, sizeof(expected)) == 0);
+}
+
+static void case_delete_reply_parsing(void) {
+    uint8_t ok_reply[] = {
+        0x05, 0x00, 0x00, 0x00, 0, 0, 0, 0, /* header */
+        0x05, 0x01, 0x06, 0x00,             /* STATUS, LE, len=6 */
+        0x00, 0x09, 0x10, 0x02,             /* related_request, ignored */
+        0x00, 0x00,                         /* ResultStatus: OK */
+    };
+    assert(xrce_session_parse_delete_reply(ok_reply, sizeof(ok_reply)));
+
+    uint8_t err_reply[] = {
+        0x05, 0x00, 0x00, 0x00, 0, 0, 0, 0,
+        0x05, 0x01, 0x06, 0x00,
+        0x00, 0x09, 0x10, 0x02,
+        0x81, 0x00, /* UXR_STATUS_ERR_INVALID_DATA (any non-OK) */
+    };
+    assert(!xrce_session_parse_delete_reply(err_reply, sizeof(err_reply)));
+}
+
 int main(void) {
     run_case("CREATE_CLIENT is byte-exact", case_create_client_byte_exact);
     run_case("CREATE_CLIENT reply parsing (OK and error)", case_create_client_reply_parsing);
@@ -218,6 +259,8 @@ int main(void) {
     run_case("WRITE_DATA wraps an already-CDR-serialized sample verbatim",
               case_write_data_wraps_sample_verbatim);
     run_case("CREATE reply parsing", case_create_reply_parsing);
+    run_case("DELETE is byte-exact", case_delete_byte_exact);
+    run_case("DELETE reply parsing (OK and error)", case_delete_reply_parsing);
 
     printf("PASS: %d test cases\n", g_tests_run);
     return 0;

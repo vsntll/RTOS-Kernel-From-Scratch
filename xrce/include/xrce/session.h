@@ -123,4 +123,18 @@ size_t xrce_session_build_read_data(xrce_session_t *s, uint8_t stream_id_raw,
 bool xrce_session_parse_data(const uint8_t *buf, size_t len, xrce_object_id_t *out_object_id,
                               const uint8_t **out_sample, size_t *out_sample_len);
 
+/* Builds a DELETE message for any entity kind (participant, topic, publisher,
+ * subscriber, datawriter, datareader). Payload is just a BaseObjectRequest --
+ * no XML, unlike CREATE -- ground-truthed against the reference client's
+ * uxr_buffer_delete_entity() (src/c/core/session/common_create_entities.c),
+ * which builds exactly request_id+object_id with "no padding" (its own
+ * comment). Reply is a STATUS submessage, same shape as CREATE's. */
+size_t xrce_session_build_delete(xrce_session_t *s, uint8_t stream_id_raw,
+                                  xrce_object_id_t object_id, uint8_t *buf, size_t cap);
+
+/* True if `buf` is a STATUS reply reporting success for the most recent
+ * DELETE request. Same wire shape as xrce_session_parse_create_reply(), kept
+ * as a separate entry point so call sites read as what they're doing. */
+bool xrce_session_parse_delete_reply(const uint8_t *buf, size_t len);
+
 #endif

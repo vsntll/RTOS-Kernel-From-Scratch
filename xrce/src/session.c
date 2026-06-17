@@ -6,6 +6,7 @@
 
 #define XRCE_SUBMSG_CREATE_CLIENT 0
 #define XRCE_SUBMSG_CREATE 1
+#define XRCE_SUBMSG_DELETE 3
 #define XRCE_SUBMSG_STATUS_AGENT 4
 #define XRCE_SUBMSG_STATUS 5
 #define XRCE_SUBMSG_WRITE_DATA 7
@@ -227,7 +228,11 @@ size_t xrce_session_build_create_xml(xrce_session_t *s, uint8_t stream_id_raw,
     return build_create(s, stream_id_raw, object_id, xml, false, 0, parent_id, buf, cap);
 }
 
-bool xrce_session_parse_create_reply(const uint8_t *buf, size_t len) {
+/* Shared by CREATE and DELETE replies -- both are just a STATUS submessage
+ * (related_request + a status byte), the only difference being which request
+ * they're replying to, which this project doesn't correlate by request_id
+ * (see the header comment on xrce_session_parse_create_reply). */
+static bool parse_status_reply(const uint8_t *buf, size_t len) {
     xrce_cdr_reader_t r;
     xrce_cdr_reader_init(&r, buf, len);
     if (!skip_message_header(&r)) {
@@ -251,6 +256,10 @@ bool xrce_session_parse_create_reply(const uint8_t *buf, size_t len) {
     }
     (void)related_request;
     return status == XRCE_STATUS_OK || status == XRCE_STATUS_OK_MATCHED;
+}
+
+bool xrce_session_parse_create_reply(const uint8_t *buf, size_t len) {
+    return parse_status_reply(buf, len);
 }
 
 size_t xrce_session_build_write_data(xrce_session_t *s, uint8_t stream_id_raw,
@@ -354,4 +363,33 @@ bool xrce_session_parse_data(const uint8_t *buf, size_t len, xrce_object_id_t *o
     *out_sample = &buf[r.pos];
     *out_sample_len = r.len - r.pos;
     return true;
+}
+
+size_t xrce_session_build_delete(xrce_session_t *s, uint8_t stream_id_raw,
+                                  xrce_object_id_t object_id, uint8_t *buf, size_t cap) {
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, cap);
+
+    if (!write_message_header(&w, s->session_id, stream_id_raw, s->out_seq_num, s->client_key)) {
+        return 0;
+    }
+    s->out_seq_num++;
+
+    size_t header_pos;
+    if (!submessage_header_at(&w, XRCE_SUBMSG_DELETE, XRCE_FLAG_ENDIANNESS_LE, &header_pos)) {
+        return 0;
+    }
+
+    size_t payload_start = w.pos;
+    uint16_t request_id = s->next_request_id++;
+    if (!write_base_object_request(&w, request_id, object_id)) {
+        return 0;
+    }
+
+    backpatch_length(buf, header_pos, w.pos - payload_start);
+    return w.pos;
+}
+
+bool xrce_session_parse_delete_reply(const uint8_t *buf, size_t len) {
+    return parse_status_reply(buf, len);
 }
