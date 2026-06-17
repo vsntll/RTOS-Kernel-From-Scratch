@@ -457,8 +457,64 @@ implicit:
   documented at each of the several places in this codebase where it
   matters rather than silently assumed away.
 
+## Phase 7a — Close the entity-lifecycle gap: DELETE
+
+Phase 4's milestone (`ros2 topic list`/`echo` work against zero custom bridge
+code) already covers session establishment and entity creation; the
+remaining literal gap vs. "session/create/delete entity operations" was
+DELETE. `xrce_session_build_delete()`/`xrce_session_parse_delete_reply()`
+(`session.h/c`) add it: a `BaseObjectRequest`-only payload (no XML, unlike
+CREATE) on `SUBMESSAGE_ID_DELETE`, replied to with the same `STATUS`
+submessage shape as CREATE's reply (factored into a shared
+`parse_status_reply()` rather than duplicated). Ground-truthed against a
+fresh clone of `Micro-XRCE-DDS-Client` (not memory): `submessage_internal.h`
+gives the full submessage id enum (`DELETE = 3`, and, useful later for
+Phase 7c, `ACKNACK = 10`/`HEARTBEAT = 11`); `common_create_entities.c`'s
+`uxr_buffer_delete_entity()` confirms the payload is exactly
+`request_id + object_id`, its own comment noting "no padding."
+`test_session.c` hand-computes the full expected byte sequence, same
+standard as `case_create_client_byte_exact`.
+
+**Verified against a real agent -- proving the entity actually stops
+existing, not just that DELETE gets an OK reply.** `host/live_delete_demo.c`
+creates participant/topic/publisher/datawriter for `rt/delete_test`,
+publishes once, waits, deletes datawriter/publisher/topic, waits again.
+Run against a real `MicroXRCEAgent udp4`, real `ros2 topic list` shows
+`/delete_test` while the entities exist and **not** afterward:
+
+```
+=== ros2 topic list WHILE ENTITY EXISTS ===
+/delete_test
+/parameter_events
+/rosout
+=== ros2 topic list AFTER DELETE ===
+/parameter_events
+/rosout
+```
+
+One debugging note worth recording: an early run of this check reused a
+UDP port an *earlier, still-running* agent process (leaked by a prior
+failed shell invocation) already had bound. The new agent process failed to
+start (`bind error ... errno: 98`), but the leaked old one silently kept
+answering -- and since it already had a participant with the same id from a
+previous successful run, the new demo's `CREATE participant` came back
+`FAILED` (object already exists under a different representation-matching
+outcome than a duplicate CREATE normally gets). Not a protocol bug --
+confirmed by checking `ps aux` and the old agent's own log line, then
+killing it and re-running against a genuinely fresh agent, which is the run
+quoted above. Separately: `pkill -f MicroXRCEAgent` run from inside a
+`bash -lc "...MicroXRCEAgent..."` string matches its own invoking shell's
+command line too (that's what `-f` matches against) and kills it -- switched
+all agent/demo process cleanup in this project's manual test invocations to
+exact-name matching or explicit `$!` PIDs instead.
+
+Status: implemented and unit-tested (byte-exact) in `xrce/`; verified live
+against a real, unmodified agent as shown above.
+
 ## Later phases
 
-Not started (services/request-reply, multi-node). Tracked at a high level
-in the top-level project plan; this file gets a new dated section per
-phase as it actually lands, same convention as `rtos/docs/design.md`.
+Not started: services/actions (7b), reliable streams/QoS enforcement (7c),
+priority-aware executor (7d), diagnostics (Phase 8), live TUI (Phase 9).
+Tracked at a high level in the top-level project plan; this file gets a new
+dated section per phase as it actually lands, same convention as
+`rtos/docs/design.md`.

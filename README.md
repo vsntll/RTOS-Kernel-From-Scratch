@@ -284,6 +284,17 @@ protocol implementation.
 
 Not yet done: services (request/reply), multi-node.
 
+**Phase 7a — DELETE, verified live: an entity really stops existing, not
+just that the agent replies OK.** `xrce_session_build_delete()`
+(`session.h/c`) adds the last entity-lifecycle operation on top of
+CREATE/WRITE_DATA/READ_DATA — ground-truthed against a fresh clone of the
+reference client (`SUBMESSAGE_ID_DELETE = 3`, payload is just
+`request_id + object_id`, no XML). `host/live_delete_demo.c` creates
+`rt/delete_test`, confirms `/delete_test` in a real `ros2 topic list`,
+deletes it, and confirms it's gone from a second real `ros2 topic list` —
+full account, including a leaked-process debugging note, in
+`xrce/docs/design.md`'s Phase 7a section.
+
 **Phase 6 — latency, throughput, and fault handling, measured rather than
 estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
 out on `rt/pong`; `host/bench_latency.c` times the real round trip through
@@ -411,6 +422,15 @@ top of the kernel above, not part of it:**
 - [x] Phase 6 — Latency (p50 6.5ms, p95 12.5ms) and burst-loss (40%@5,
       80%@30) measured against real firmware; agent disconnect/reconnect
       recovery confirmed; limitations vs. real micro-ROS written up
+- [x] Phase 7a — DELETE entity operation, verified live: `ros2 topic list`
+      shows a topic while it exists and not after deletion
+- [ ] Phase 7b — Services (request/reply) and actions (goal/feedback/cancel)
+- [ ] Phase 7c — QoS profiles (reliable vs. best-effort, history depth)
+      enforced for real under induced packet loss
+- [ ] Phase 7d — Priority-aware executor dispatching callbacks via the
+      RTOS's real priority scheduler
+- [ ] Phase 8 — Live diagnostics exposed as ROS2 topics/services
+- [ ] Phase 9 — `htop`-style live terminal UI over the diagnostics topic
 
 ## Troubleshooting
 
