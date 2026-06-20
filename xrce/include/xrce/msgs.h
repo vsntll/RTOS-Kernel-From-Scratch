@@ -64,4 +64,26 @@ typedef struct {
 bool sensor_msgs_Imu_encode(const sensor_msgs_Imu *msg, uint8_t *buf, size_t cap, size_t *out_len);
 bool sensor_msgs_Imu_decode(const uint8_t *buf, size_t len, sensor_msgs_Imu *out);
 
+/* std_srvs/srv/Trigger -- Phase 7b's demo service ("trigger a self-test").
+ * Request has no fields at all (still gets its own 4-byte CDR header, same
+ * as every other message here -- an empty struct isn't a zero-byte wire
+ * message). Response is `bool success; string message`, field order
+ * ground-truthed against `ros2 interface show std_srvs/srv/Trigger`. */
+typedef struct {
+    int _unused; /* C forbids an empty struct; never read. */
+} std_srvs_Trigger_Request;
+
+bool std_srvs_Trigger_Request_encode(const std_srvs_Trigger_Request *msg, uint8_t *buf, size_t cap,
+                                      size_t *out_len);
+bool std_srvs_Trigger_Request_decode(const uint8_t *buf, size_t len, std_srvs_Trigger_Request *out);
+
+typedef struct {
+    bool success;
+    char message[XRCE_MSGS_STRING_MAX];
+} std_srvs_Trigger_Response;
+
+bool std_srvs_Trigger_Response_encode(const std_srvs_Trigger_Response *msg, uint8_t *buf, size_t cap,
+                                       size_t *out_len);
+bool std_srvs_Trigger_Response_decode(const uint8_t *buf, size_t len, std_srvs_Trigger_Response *out);
+
 #endif

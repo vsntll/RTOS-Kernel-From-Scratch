@@ -87,11 +87,37 @@ static void case_imu_encode_fails_on_small_buffer(void) {
     assert(!sensor_msgs_Imu_encode(&in, buf, sizeof(buf), &len));
 }
 
+static void case_trigger_request_round_trip(void) {
+    std_srvs_Trigger_Request in = {0};
+    uint8_t buf[16];
+    size_t len;
+    assert(std_srvs_Trigger_Request_encode(&in, buf, sizeof(buf), &len));
+    assert(len == 4); /* header only -- Trigger's request has no fields */
+
+    std_srvs_Trigger_Request out;
+    assert(std_srvs_Trigger_Request_decode(buf, len, &out));
+}
+
+static void case_trigger_response_round_trip(void) {
+    std_srvs_Trigger_Response in = {.success = true};
+    strcpy(in.message, "self-test #1 ok");
+    uint8_t buf[64];
+    size_t len;
+    assert(std_srvs_Trigger_Response_encode(&in, buf, sizeof(buf), &len));
+
+    std_srvs_Trigger_Response out;
+    assert(std_srvs_Trigger_Response_decode(buf, len, &out));
+    assert(out.success == in.success);
+    assert(strcmp(out.message, in.message) == 0);
+}
+
 int main(void) {
     run_case("std_msgs/Int32 round trip", case_int32_round_trip);
     run_case("std_msgs/String round trip", case_string_round_trip);
     run_case("sensor_msgs/Imu round trip (nested + mixed alignment)", case_imu_round_trip);
     run_case("Imu encode fails cleanly on undersized buffer", case_imu_encode_fails_on_small_buffer);
+    run_case("std_srvs/Trigger request round trip (no fields)", case_trigger_request_round_trip);
+    run_case("std_srvs/Trigger response round trip", case_trigger_response_round_trip);
 
     printf("PASS: %d test cases\n", g_tests_run);
     return 0;

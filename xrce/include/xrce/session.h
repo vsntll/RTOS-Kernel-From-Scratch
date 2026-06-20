@@ -42,6 +42,31 @@
 #define XRCE_OBJK_SUBSCRIBER 0x04
 #define XRCE_OBJK_DATAWRITER 0x05
 #define XRCE_OBJK_DATAREADER 0x06
+#define XRCE_OBJK_REQUESTER 0x07
+#define XRCE_OBJK_REPLIER 0x08
+
+/* Services (Phase 7b): REQUESTER/REPLIER are CREATE'd exactly like any
+ * other XML-represented entity (xrce_session_build_create_xml() already
+ * covers them -- ground-truthed against the agent's Requester::create()/
+ * Replier::create(), which read the same CREATE payload shape: kind byte +
+ * REPRESENTATION_AS_XML_STRING + xml string + parent ObjectId). Requests
+ * and replies also reuse WRITE_DATA/READ_DATA/DATA as-is -- no new
+ * submessages -- with one wrinkle, ground-truthed against the agent's
+ * FastDDSReplier::write()/read() (src/cpp/middleware/fastdds/FastDDSEntities.cpp):
+ * a Replier's WRITE_DATA payload must be prefixed with the 24-byte
+ * `SampleIdentity` (12-byte GUID prefix + 4-byte entity id + 8-byte
+ * sequence number) taken verbatim from the matching request's DATA
+ * payload, which is itself prefixed the same way when read off a Replier
+ * -- this is how the agent's FastDDS-backed DDS-RPC correlates a reply to
+ * its request, the same mechanism a native ROS2 service client/server
+ * uses under rmw_fastrtps. A Requester's own WRITE_DATA (writing a
+ * request) and its DATA (reading a reply) carry NO such prefix -- the
+ * agent assigns/tracks that identity for the requester side internally
+ * (Requester::write()/read_fn() in the agent's source never touch a
+ * client-supplied SampleIdentity). This project's client only ever needs
+ * to treat these 24 bytes as an opaque token to store-and-replay, never to
+ * interpret. */
+#define XRCE_SAMPLE_IDENTITY_SIZE 24
 
 #define XRCE_STATUS_OK 0x00
 #define XRCE_STATUS_OK_MATCHED 0x01

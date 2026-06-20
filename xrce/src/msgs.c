@@ -102,3 +102,41 @@ bool sensor_msgs_Imu_decode(const uint8_t *buf, size_t len, sensor_msgs_Imu *out
            read_vec3(&r, &out->linear_acceleration) &&
            read_cov(&r, out->linear_acceleration_covariance);
 }
+
+bool std_srvs_Trigger_Request_encode(const std_srvs_Trigger_Request *msg, uint8_t *buf, size_t cap,
+                                      size_t *out_len) {
+    (void)msg;
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, cap);
+    if (!xrce_cdr_write_header(&w)) {
+        return false;
+    }
+    *out_len = w.pos;
+    return true;
+}
+
+bool std_srvs_Trigger_Request_decode(const uint8_t *buf, size_t len, std_srvs_Trigger_Request *out) {
+    (void)out;
+    xrce_cdr_reader_t r;
+    xrce_cdr_reader_init(&r, buf, len);
+    return xrce_cdr_read_header(&r);
+}
+
+bool std_srvs_Trigger_Response_encode(const std_srvs_Trigger_Response *msg, uint8_t *buf, size_t cap,
+                                       size_t *out_len) {
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, cap);
+    if (!xrce_cdr_write_header(&w) || !xrce_cdr_write_bool(&w, msg->success) ||
+        !xrce_cdr_write_string(&w, msg->message)) {
+        return false;
+    }
+    *out_len = w.pos;
+    return true;
+}
+
+bool std_srvs_Trigger_Response_decode(const uint8_t *buf, size_t len, std_srvs_Trigger_Response *out) {
+    xrce_cdr_reader_t r;
+    xrce_cdr_reader_init(&r, buf, len);
+    return xrce_cdr_read_header(&r) && xrce_cdr_read_bool(&r, &out->success) &&
+           xrce_cdr_read_string(&r, out->message, sizeof(out->message));
+}
