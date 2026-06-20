@@ -86,4 +86,127 @@ bool std_srvs_Trigger_Response_encode(const std_srvs_Trigger_Response *msg, uint
                                        size_t *out_len);
 bool std_srvs_Trigger_Response_decode(const uint8_t *buf, size_t len, std_srvs_Trigger_Response *out);
 
+/* Phase 7b actions: example_interfaces/action/Fibonacci (goal `int32
+ * order`, result/feedback `int32[] sequence`) plus the synthesized
+ * SendGoal/GetResult/FeedbackMessage wrapper types real rclcpp/rclpy
+ * actions use under the hood -- every field layout here is copied from the
+ * REAL generated headers installed under
+ * /opt/ros/jazzy/include/example_interfaces/.../detail/fibonacci__struct.h
+ * and .../unique_identifier_msgs/.../uuid__struct.h, not guessed. A goal_id
+ * is a bare `uint8_t[16]` (no length prefix -- it's a fixed array, not a
+ * CDR sequence, per unique_identifier_msgs/msg/UUID). */
+#define XRCE_MSGS_UUID_SIZE 16
+#define XRCE_MSGS_SEQ_I32_MAX 16
+
+typedef struct {
+    int32_t order;
+} example_interfaces_Fibonacci_Goal;
+
+typedef struct {
+    int32_t sequence[XRCE_MSGS_SEQ_I32_MAX];
+    uint32_t sequence_count;
+} example_interfaces_Fibonacci_Result;
+
+typedef example_interfaces_Fibonacci_Result example_interfaces_Fibonacci_Feedback;
+
+typedef struct {
+    uint8_t goal_id[XRCE_MSGS_UUID_SIZE];
+    int32_t order;
+} example_interfaces_Fibonacci_SendGoal_Request;
+
+bool example_interfaces_Fibonacci_SendGoal_Request_encode(
+    const example_interfaces_Fibonacci_SendGoal_Request *msg, uint8_t *buf, size_t cap, size_t *out_len);
+bool example_interfaces_Fibonacci_SendGoal_Request_decode(
+    const uint8_t *buf, size_t len, example_interfaces_Fibonacci_SendGoal_Request *out);
+
+typedef struct {
+    bool accepted;
+    builtin_interfaces_Time stamp;
+} example_interfaces_Fibonacci_SendGoal_Response;
+
+bool example_interfaces_Fibonacci_SendGoal_Response_encode(
+    const example_interfaces_Fibonacci_SendGoal_Response *msg, uint8_t *buf, size_t cap,
+    size_t *out_len);
+bool example_interfaces_Fibonacci_SendGoal_Response_decode(
+    const uint8_t *buf, size_t len, example_interfaces_Fibonacci_SendGoal_Response *out);
+
+typedef struct {
+    uint8_t goal_id[XRCE_MSGS_UUID_SIZE];
+} example_interfaces_Fibonacci_GetResult_Request;
+
+bool example_interfaces_Fibonacci_GetResult_Request_encode(
+    const example_interfaces_Fibonacci_GetResult_Request *msg, uint8_t *buf, size_t cap, size_t *out_len);
+bool example_interfaces_Fibonacci_GetResult_Request_decode(
+    const uint8_t *buf, size_t len, example_interfaces_Fibonacci_GetResult_Request *out);
+
+typedef struct {
+    int8_t status;
+    example_interfaces_Fibonacci_Result result;
+} example_interfaces_Fibonacci_GetResult_Response;
+
+bool example_interfaces_Fibonacci_GetResult_Response_encode(
+    const example_interfaces_Fibonacci_GetResult_Response *msg, uint8_t *buf, size_t cap,
+    size_t *out_len);
+bool example_interfaces_Fibonacci_GetResult_Response_decode(
+    const uint8_t *buf, size_t len, example_interfaces_Fibonacci_GetResult_Response *out);
+
+typedef struct {
+    uint8_t goal_id[XRCE_MSGS_UUID_SIZE];
+    example_interfaces_Fibonacci_Feedback feedback;
+} example_interfaces_Fibonacci_FeedbackMessage;
+
+bool example_interfaces_Fibonacci_FeedbackMessage_encode(
+    const example_interfaces_Fibonacci_FeedbackMessage *msg, uint8_t *buf, size_t cap, size_t *out_len);
+bool example_interfaces_Fibonacci_FeedbackMessage_decode(
+    const uint8_t *buf, size_t len, example_interfaces_Fibonacci_FeedbackMessage *out);
+
+/* action_msgs/msg/GoalInfo, GoalStatus(Array), and srv/CancelGoal -- real,
+ * already-installed standard interfaces (not synthesized per-action),
+ * field layouts likewise copied from the real generated headers under
+ * /opt/ros/jazzy/include/action_msgs, .../detail/ struct headers. */
+#define XRCE_MSGS_GOAL_STATUS_MAX 8
+
+typedef struct {
+    uint8_t goal_id[XRCE_MSGS_UUID_SIZE];
+    builtin_interfaces_Time stamp;
+} action_msgs_GoalInfo;
+
+typedef struct {
+    action_msgs_GoalInfo goal_info;
+    int8_t status;
+} action_msgs_GoalStatus;
+
+bool action_msgs_GoalStatus_encode(const action_msgs_GoalStatus *msg, uint8_t *buf, size_t cap,
+                                    size_t *out_len);
+bool action_msgs_GoalStatus_decode(const uint8_t *buf, size_t len, action_msgs_GoalStatus *out);
+
+typedef struct {
+    action_msgs_GoalStatus status_list[XRCE_MSGS_GOAL_STATUS_MAX];
+    uint32_t status_list_count;
+} action_msgs_GoalStatusArray;
+
+bool action_msgs_GoalStatusArray_encode(const action_msgs_GoalStatusArray *msg, uint8_t *buf, size_t cap,
+                                         size_t *out_len);
+bool action_msgs_GoalStatusArray_decode(const uint8_t *buf, size_t len, action_msgs_GoalStatusArray *out);
+
+typedef struct {
+    action_msgs_GoalInfo goal_info;
+} action_msgs_CancelGoal_Request;
+
+bool action_msgs_CancelGoal_Request_encode(const action_msgs_CancelGoal_Request *msg, uint8_t *buf,
+                                            size_t cap, size_t *out_len);
+bool action_msgs_CancelGoal_Request_decode(const uint8_t *buf, size_t len,
+                                            action_msgs_CancelGoal_Request *out);
+
+typedef struct {
+    int8_t return_code;
+    action_msgs_GoalInfo goals_canceling[XRCE_MSGS_GOAL_STATUS_MAX];
+    uint32_t goals_canceling_count;
+} action_msgs_CancelGoal_Response;
+
+bool action_msgs_CancelGoal_Response_encode(const action_msgs_CancelGoal_Response *msg, uint8_t *buf,
+                                             size_t cap, size_t *out_len);
+bool action_msgs_CancelGoal_Response_decode(const uint8_t *buf, size_t len,
+                                             action_msgs_CancelGoal_Response *out);
+
 #endif

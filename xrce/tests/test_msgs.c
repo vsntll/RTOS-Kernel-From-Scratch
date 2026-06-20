@@ -111,6 +111,113 @@ static void case_trigger_response_round_trip(void) {
     assert(strcmp(out.message, in.message) == 0);
 }
 
+static void fill_uuid(uint8_t goal_id[XRCE_MSGS_UUID_SIZE], uint8_t seed) {
+    for (int i = 0; i < XRCE_MSGS_UUID_SIZE; i++) {
+        goal_id[i] = (uint8_t)(seed + i);
+    }
+}
+
+static void case_send_goal_round_trip(void) {
+    example_interfaces_Fibonacci_SendGoal_Request in = {.order = 7};
+    fill_uuid(in.goal_id, 0x10);
+    uint8_t buf[64];
+    size_t len;
+    assert(example_interfaces_Fibonacci_SendGoal_Request_encode(&in, buf, sizeof(buf), &len));
+
+    example_interfaces_Fibonacci_SendGoal_Request out;
+    assert(example_interfaces_Fibonacci_SendGoal_Request_decode(buf, len, &out));
+    assert(out.order == in.order);
+    assert(memcmp(out.goal_id, in.goal_id, XRCE_MSGS_UUID_SIZE) == 0);
+
+    example_interfaces_Fibonacci_SendGoal_Response resp_in = {.accepted = true,
+                                                                .stamp = {.sec = 5, .nanosec = 6}};
+    assert(example_interfaces_Fibonacci_SendGoal_Response_encode(&resp_in, buf, sizeof(buf), &len));
+    example_interfaces_Fibonacci_SendGoal_Response resp_out;
+    assert(example_interfaces_Fibonacci_SendGoal_Response_decode(buf, len, &resp_out));
+    assert(resp_out.accepted == resp_in.accepted);
+    assert(resp_out.stamp.sec == 5 && resp_out.stamp.nanosec == 6);
+}
+
+static void case_get_result_round_trip(void) {
+    example_interfaces_Fibonacci_GetResult_Request in;
+    fill_uuid(in.goal_id, 0x20);
+    uint8_t buf[64];
+    size_t len;
+    assert(example_interfaces_Fibonacci_GetResult_Request_encode(&in, buf, sizeof(buf), &len));
+    example_interfaces_Fibonacci_GetResult_Request out;
+    assert(example_interfaces_Fibonacci_GetResult_Request_decode(buf, len, &out));
+    assert(memcmp(out.goal_id, in.goal_id, XRCE_MSGS_UUID_SIZE) == 0);
+
+    example_interfaces_Fibonacci_GetResult_Response resp_in = {.status = 4};
+    resp_in.result.sequence_count = 3;
+    resp_in.result.sequence[0] = 0;
+    resp_in.result.sequence[1] = 1;
+    resp_in.result.sequence[2] = 1;
+    assert(example_interfaces_Fibonacci_GetResult_Response_encode(&resp_in, buf, sizeof(buf), &len));
+    example_interfaces_Fibonacci_GetResult_Response resp_out;
+    assert(example_interfaces_Fibonacci_GetResult_Response_decode(buf, len, &resp_out));
+    assert(resp_out.status == 4);
+    assert(resp_out.result.sequence_count == 3);
+    assert(resp_out.result.sequence[2] == 1);
+}
+
+static void case_feedback_message_round_trip(void) {
+    example_interfaces_Fibonacci_FeedbackMessage in = {0};
+    fill_uuid(in.goal_id, 0x30);
+    in.feedback.sequence_count = 2;
+    in.feedback.sequence[0] = 0;
+    in.feedback.sequence[1] = 1;
+
+    uint8_t buf[64];
+    size_t len;
+    assert(example_interfaces_Fibonacci_FeedbackMessage_encode(&in, buf, sizeof(buf), &len));
+    example_interfaces_Fibonacci_FeedbackMessage out;
+    assert(example_interfaces_Fibonacci_FeedbackMessage_decode(buf, len, &out));
+    assert(memcmp(out.goal_id, in.goal_id, XRCE_MSGS_UUID_SIZE) == 0);
+    assert(out.feedback.sequence_count == 2 && out.feedback.sequence[1] == 1);
+}
+
+static void case_goal_status_array_round_trip(void) {
+    action_msgs_GoalStatusArray in = {0};
+    in.status_list_count = 2;
+    fill_uuid(in.status_list[0].goal_info.goal_id, 0x40);
+    in.status_list[0].goal_info.stamp = (builtin_interfaces_Time){.sec = 1, .nanosec = 2};
+    in.status_list[0].status = 2; /* EXECUTING */
+    fill_uuid(in.status_list[1].goal_info.goal_id, 0x50);
+    in.status_list[1].status = 4; /* SUCCEEDED */
+
+    uint8_t buf[128];
+    size_t len;
+    assert(action_msgs_GoalStatusArray_encode(&in, buf, sizeof(buf), &len));
+    action_msgs_GoalStatusArray out;
+    assert(action_msgs_GoalStatusArray_decode(buf, len, &out));
+    assert(out.status_list_count == 2);
+    assert(out.status_list[0].status == 2);
+    assert(out.status_list[1].status == 4);
+    assert(memcmp(out.status_list[1].goal_info.goal_id, in.status_list[1].goal_info.goal_id,
+                   XRCE_MSGS_UUID_SIZE) == 0);
+}
+
+static void case_cancel_goal_round_trip(void) {
+    action_msgs_CancelGoal_Request in = {0};
+    fill_uuid(in.goal_info.goal_id, 0x60);
+    uint8_t buf[64];
+    size_t len;
+    assert(action_msgs_CancelGoal_Request_encode(&in, buf, sizeof(buf), &len));
+    action_msgs_CancelGoal_Request out;
+    assert(action_msgs_CancelGoal_Request_decode(buf, len, &out));
+    assert(memcmp(out.goal_info.goal_id, in.goal_info.goal_id, XRCE_MSGS_UUID_SIZE) == 0);
+
+    action_msgs_CancelGoal_Response resp_in = {.return_code = 0, .goals_canceling_count = 1};
+    fill_uuid(resp_in.goals_canceling[0].goal_id, 0x60);
+    assert(action_msgs_CancelGoal_Response_encode(&resp_in, buf, sizeof(buf), &len));
+    action_msgs_CancelGoal_Response resp_out;
+    assert(action_msgs_CancelGoal_Response_decode(buf, len, &resp_out));
+    assert(resp_out.goals_canceling_count == 1);
+    assert(memcmp(resp_out.goals_canceling[0].goal_id, resp_in.goals_canceling[0].goal_id,
+                   XRCE_MSGS_UUID_SIZE) == 0);
+}
+
 int main(void) {
     run_case("std_msgs/Int32 round trip", case_int32_round_trip);
     run_case("std_msgs/String round trip", case_string_round_trip);
@@ -118,6 +225,11 @@ int main(void) {
     run_case("Imu encode fails cleanly on undersized buffer", case_imu_encode_fails_on_small_buffer);
     run_case("std_srvs/Trigger request round trip (no fields)", case_trigger_request_round_trip);
     run_case("std_srvs/Trigger response round trip", case_trigger_response_round_trip);
+    run_case("Fibonacci SendGoal request/response round trip", case_send_goal_round_trip);
+    run_case("Fibonacci GetResult request/response round trip", case_get_result_round_trip);
+    run_case("Fibonacci FeedbackMessage round trip", case_feedback_message_round_trip);
+    run_case("action_msgs/GoalStatusArray round trip", case_goal_status_array_round_trip);
+    run_case("action_msgs/CancelGoal request/response round trip", case_cancel_goal_round_trip);
 
     printf("PASS: %d test cases\n", g_tests_run);
     return 0;
