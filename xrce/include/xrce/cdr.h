@@ -55,6 +55,13 @@ bool xrce_cdr_write_bytes(xrce_cdr_writer_t *w, const uint8_t *data, size_t len)
  * C string. */
 bool xrce_cdr_write_string(xrce_cdr_writer_t *w, const char *s);
 
+/* CDR sequence<int32>: uint32 element count, then that many 4-byte-aligned
+ * int32 elements -- the layout every unbounded `int32[]` ROS2 field uses
+ * (e.g. action feedback/result arrays). Kept as its own primitive rather
+ * than a generic templated sequence writer: C has no generics, and this
+ * project only ever needs a handful of concrete element types. */
+bool xrce_cdr_write_seq_i32(xrce_cdr_writer_t *w, const int32_t *elems, uint32_t count);
+
 void xrce_cdr_reader_init(xrce_cdr_reader_t *r, const uint8_t *buf, size_t len);
 /* Consumes and validates the 4-byte header; fails (returns false) on
  * anything other than CDR_LE, since that's the only thing this project
@@ -72,5 +79,9 @@ bool xrce_cdr_read_bytes(xrce_cdr_reader_t *r, uint8_t *out, size_t len);
  * encoded string (including its terminator) doesn't fit `out_cap`, rather
  * than silently truncating a real payload. */
 bool xrce_cdr_read_string(xrce_cdr_reader_t *r, char *out, size_t out_cap);
+
+/* Reads a sequence<int32> into `out` (capacity `out_cap` elements); fails
+ * (rather than truncating) if the encoded count exceeds `out_cap`. */
+bool xrce_cdr_read_seq_i32(xrce_cdr_reader_t *r, int32_t *out, size_t out_cap, uint32_t *out_count);
 
 #endif

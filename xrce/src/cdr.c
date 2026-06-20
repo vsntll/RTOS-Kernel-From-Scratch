@@ -128,6 +128,18 @@ bool xrce_cdr_write_string(xrce_cdr_writer_t *w, const char *s) {
     return true;
 }
 
+bool xrce_cdr_write_seq_i32(xrce_cdr_writer_t *w, const int32_t *elems, uint32_t count) {
+    if (!xrce_cdr_write_u32(w, count)) {
+        return false;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        if (!xrce_cdr_write_i32(w, elems[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void xrce_cdr_reader_init(xrce_cdr_reader_t *r, const uint8_t *buf, size_t len) {
     r->buf = buf;
     r->len = len;
@@ -227,5 +239,19 @@ bool xrce_cdr_read_string(xrce_cdr_reader_t *r, char *out, size_t out_cap) {
     if (out[slen - 1] != '\0') {
         return false; /* malformed: CDR strings are always NUL-terminated */
     }
+    return true;
+}
+
+bool xrce_cdr_read_seq_i32(xrce_cdr_reader_t *r, int32_t *out, size_t out_cap, uint32_t *out_count) {
+    uint32_t count;
+    if (!xrce_cdr_read_u32(r, &count) || count > out_cap) {
+        return false;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        if (!xrce_cdr_read_i32(r, &out[i])) {
+            return false;
+        }
+    }
+    *out_count = count;
     return true;
 }

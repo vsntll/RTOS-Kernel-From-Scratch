@@ -119,6 +119,40 @@ static void case_read_fails_on_truncated_buffer(void) {
     assert(!xrce_cdr_read_f64(&r, &v));
 }
 
+static void case_seq_i32_round_trip(void) {
+    uint8_t buf[32];
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, sizeof(buf));
+    int32_t in[3] = {1, -2, 300};
+    assert(xrce_cdr_write_header(&w));
+    assert(xrce_cdr_write_seq_i32(&w, in, 3));
+
+    xrce_cdr_reader_t r;
+    xrce_cdr_reader_init(&r, buf, w.pos);
+    int32_t out[3];
+    uint32_t count;
+    assert(xrce_cdr_read_header(&r));
+    assert(xrce_cdr_read_seq_i32(&r, out, 3, &count));
+    assert(count == 3);
+    assert(memcmp(in, out, sizeof(in)) == 0);
+}
+
+static void case_seq_i32_read_rejects_oversized_count(void) {
+    uint8_t buf[32];
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, sizeof(buf));
+    int32_t in[3] = {1, 2, 3};
+    assert(xrce_cdr_write_header(&w));
+    assert(xrce_cdr_write_seq_i32(&w, in, 3));
+
+    xrce_cdr_reader_t r;
+    xrce_cdr_reader_init(&r, buf, w.pos);
+    int32_t out[2]; /* smaller than the encoded count of 3 */
+    uint32_t count;
+    assert(xrce_cdr_read_header(&r));
+    assert(!xrce_cdr_read_seq_i32(&r, out, 2, &count));
+}
+
 int main(void) {
     run_case("header round trip", case_header_round_trip);
     run_case("header rejects big-endian", case_header_rejects_big_endian);
@@ -126,6 +160,8 @@ int main(void) {
     run_case("string round trip", case_string_round_trip);
     run_case("write fails when buffer too small", case_write_fails_when_buffer_too_small);
     run_case("read fails on truncated buffer", case_read_fails_on_truncated_buffer);
+    run_case("sequence<int32> round trip", case_seq_i32_round_trip);
+    run_case("sequence<int32> read rejects an oversized count", case_seq_i32_read_rejects_oversized_count);
 
     printf("PASS: %d test cases\n", g_tests_run);
     return 0;
