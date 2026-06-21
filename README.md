@@ -282,7 +282,8 @@ left in echo mode corrupting traffic, then a log-parsing method that
 missed text split across lines). Neither was a bug in this project's
 protocol implementation.
 
-Not yet done: services (request/reply), multi-node.
+Not yet done (at Phase 5): services (request/reply), multi-node. Services
+and actions land in Phase 7b below; multi-node is still not done.
 
 **Phase 7a — DELETE, verified live: an entity really stops existing, not
 just that the agent replies OK.** `xrce_session_build_delete()`
@@ -294,6 +295,26 @@ reference client (`SUBMESSAGE_ID_DELETE = 3`, payload is just
 deletes it, and confirms it's gone from a second real `ros2 topic list` —
 full account, including a leaked-process debugging note, in
 `xrce/docs/design.md`'s Phase 7a section.
+
+**Phase 7b — services and actions, both verified against real, unmodified
+ROS2 tooling.** REQUESTER/REPLIER entities (`host/live_service_demo.c`)
+reuse the existing CREATE/WRITE_DATA/READ_DATA machinery almost entirely
+unchanged — the one real addition is a 24-byte `SampleIdentity` prefix
+(ground-truthed against the agent's own FastDDS middleware source) that
+correlates a Replier's reply to its request. `ros2 service call /self_test
+std_srvs/srv/Trigger` gets a real, correctly-numbered response every time.
+Actions (`host/live_action_demo.c`, `example_interfaces/action/Fibonacci`)
+turned out to need no new protocol work at all — a ROS2 action is just
+three services and two topics under a naming convention — only new message
+types, whose exact wire layout came from the real generated ROS2 headers,
+not guesswork. `ros2 action send_goal /fibonacci
+example_interfaces/action/Fibonacci "{order: 5}" --feedback` prints real
+incrementing Fibonacci feedback and a matching final result; a small
+`rclpy` script driving the standard `ActionClient` confirms cancellation
+mid-flight actually stops the goal at the right point. Two real bugs (a
+GetResult request that needs to be held rather than polled, and a demo
+bug that permanently rejected goals after the first one completed) are
+recorded in full in `xrce/docs/design.md`'s Phase 7b section.
 
 **Phase 6 — latency, throughput, and fault handling, measured rather than
 estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
@@ -424,7 +445,9 @@ top of the kernel above, not part of it:**
       recovery confirmed; limitations vs. real micro-ROS written up
 - [x] Phase 7a — DELETE entity operation, verified live: `ros2 topic list`
       shows a topic while it exists and not after deletion
-- [ ] Phase 7b — Services (request/reply) and actions (goal/feedback/cancel)
+- [x] Phase 7b — Services (`ros2 service call` answered by a real Replier)
+      and actions (`ros2 action send_goal` with real feedback, result, and
+      cancellation, verified against the CLI and `rclpy` directly)
 - [ ] Phase 7c — QoS profiles (reliable vs. best-effort, history depth)
       enforced for real under induced packet loss
 - [ ] Phase 7d — Priority-aware executor dispatching callbacks via the
