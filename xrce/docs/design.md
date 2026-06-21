@@ -511,10 +511,128 @@ exact-name matching or explicit `$!` PIDs instead.
 Status: implemented and unit-tested (byte-exact) in `xrce/`; verified live
 against a real, unmodified agent as shown above.
 
+## Phase 7b — Services and actions
+
+**Services.** The XRCE `REQUESTER`/`REPLIER` object kinds (`0x07`/`0x08`,
+ground-truthed against the reference client's `object_id.h`) turn out to
+need almost no new protocol code: their CREATE payload is the exact same
+shape `xrce_session_build_create_xml()` already builds for every other
+XML-represented entity (confirmed by reading the agent's
+`Requester::create()`/`Replier::create()`, `src/cpp/requester/Requester.cpp`
+/`src/cpp/replier/Replier.cpp`), and requests/replies ride the same
+WRITE_DATA/READ_DATA/DATA submessages topics already use. The one real
+addition, found by reading the agent's FastDDS middleware layer
+(`FastDDSReplier::write()`/`read()`,
+`src/cpp/middleware/fastdds/FastDDSEntities.cpp`) rather than guessed: a
+Replier's incoming request (via DATA) and outgoing reply (via WRITE_DATA)
+are each prefixed with a 24-byte `SampleIdentity` (12-byte GUID prefix +
+4-byte entity id + 8-byte sequence number) that correlates a reply to its
+request at the DDS-RPC layer -- this project's client only ever needs to
+store-and-replay those 24 bytes verbatim (`XRCE_SAMPLE_IDENTITY_SIZE`,
+`session.h`), never interpret them. A Requester's own request/reply traffic
+carries no such prefix -- the agent tracks that identity internally on that
+side (`Requester::write()`/`read_fn()` never touch a client-supplied one).
+
+Demo service: `std_srvs/srv/Trigger` (empty request; `bool success; string
+message` response -- a real, already-installed standard interface, chosen
+specifically to avoid needing `colcon`/custom interface generation, which
+this WSL image doesn't have). `host/live_service_demo.c` creates a Replier
+named `self_test` and answers real requests.
+
+**A real naming gap, found only by testing, not by reading docs**: the
+official reference client XML example
+(`examples/RequestAdder/main.c`) only sets a bare `service_name` attribute
+and lets the library derive the underlying DDS request/reply topic names.
+Doing exactly that got the agent to create the Replier without error, but
+`ros2 service list` never showed it -- FastDDS's own default topic-name
+derivation from `service_name` does not match ROS2's own DDS-RPC naming
+convention (confirmed via `design.ros2.org/articles/topic_and_service_names.html`
+and cross-checked empirically against a real `rclpy` service's hidden
+topics: `ros2 topic list --include-hidden-topics` doesn't even show
+service topics -- they're excluded from the ROS graph API entirely, not
+merely hidden -- so the actual check was standing up a real Python
+`rclpy` service and confirming `ros2 service list` found it, then applying
+the same fix here). Fix: set `<request_topic_name>`/`<reply_topic_name>`
+explicitly to ROS2's own convention -- `rq` + fully-qualified name +
+`Request`, `rr` + ... + `Reply` (e.g. `rq/self_testRequest`,
+`rr/self_testReply`) -- rather than relying on any library default.
+Confirmed after the fix: `ros2 service list` shows `/self_test`, and three
+consecutive `ros2 service call /self_test std_srvs/srv/Trigger` calls each
+got a distinct, correctly-numbered real response
+(`success=True, message='self-test #1/2/3 ok'`).
+
+**Actions.** `example_interfaces/action/Fibonacci` (goal `int32 order`,
+result/feedback `int32[] sequence` -- a real, already-installed action
+type, chosen the same way `Trigger` was to avoid custom interface
+generation). A ROS2 action turns out to be nothing new at the XRCE level:
+per `design.ros2.org/articles/actions.html`, it's exactly three services
+(`send_goal`, `cancel_goal`, `get_result`, each under a
+`<action>/_action/<verb>` name) and two plain topics (`feedback`,
+`status`) -- entirely built from what 7b's services work and Phase 4's
+plain topics already provide. The synthesized wrapper types
+(`Fibonacci_SendGoal_Request/Response`, `Fibonacci_GetResult_Request/Response`,
+`Fibonacci_FeedbackMessage`) and the standard `action_msgs` types
+(`GoalInfo`, `GoalStatus(Array)`, `CancelGoal_Request/Response`) were not
+guessed from `ros2 interface show` (which only shows the user-visible
+`Goal`/`Result`/`Feedback`, not the RMW-level wrappers) -- their exact
+field layout was read directly from the real generated C headers installed
+under `/opt/ros/jazzy/include/example_interfaces/.../detail/fibonacci__struct.h`
+and `.../action_msgs/.../detail/*__struct.h`, which is strictly better
+ground truth than any doc for field layout specifically (`msgs.h`'s header
+comment records this). `cdr.h` gained a `sequence<int32>` primitive
+(`xrce_cdr_write_seq_i32`/`read_seq_i32`) for the `int32[]`
+feedback/result fields and reused inline for `GoalStatus[]`/`GoalInfo[]`.
+
+`host/live_action_demo.c` runs all five action entities from a single
+poll loop (no RTOS task involvement yet -- that's Phase 7d) and got two
+real behavioral bugs found only by testing against real `ros2 action`
+tooling, not assumed from the spec:
+- **A held-open GetResult, not a polled one.** The first version replied
+  "not ready yet" and dropped the request if the goal wasn't done,
+  assuming (wrongly) that a real client would retry. `ros2 action
+  send_goal --feedback` sends GetResult exactly once, right after goal
+  acceptance, and then just waits -- confirmed by it never printing a
+  `Result:` section at all with the polling version, and the server log
+  showing exactly one GetResult request despite the goal running for
+  several more seconds. Fixed by holding the request's `SampleIdentity`
+  and replying only once the goal reaches a terminal state
+  (`g_result_pending`/`maybe_reply_pending_result()`).
+- **A demo bug, not a protocol bug: goals stayed rejected forever after
+  the first one.** `accepted = !g_goal_active` never got reset because
+  completing a goal set `g_goal_done` but left `g_goal_active` true
+  forever, so a second, independent `ros2 action send_goal` call got
+  "Goal was rejected." Fixed by accepting whenever `!g_goal_active ||
+  g_goal_done`. Confirmed after the fix: two independent goals in a row
+  both completed successfully.
+
+**Verified against real, unmodified ROS2 tooling, both the CLI and
+`rclpy` directly:**
+- `ros2 action list` shows `/fibonacci`.
+- `ros2 action send_goal /fibonacci example_interfaces/action/Fibonacci
+  "{order: 5}" --feedback` prints five real, correctly-valued Fibonacci
+  feedback messages (`0, 1, 1, 2, 3`) followed by `Goal finished with
+  status: SUCCEEDED` and a matching `Result:`.
+- A second, independent goal (`order: 3`) also completes correctly, proving
+  the server actually supports more than one goal in sequence.
+- **Cancellation**, verified with a small `rclpy` script using the
+  standard `ActionClient` (the same library `ros2 action send_goal` itself
+  uses internally -- not a custom bridge) since the `ros2 action` CLI has
+  no `cancel_goal` subcommand and doesn't cancel on Ctrl-C: sends `{order:
+  20}`, waits for 4 feedback messages, calls `cancel_goal_async()`, and
+  gets back a real `CancelGoal_Response(return_code=0, goals_canceling=[...])`
+  followed by `final status: 5` (CANCELED) with the sequence frozen at
+  exactly the 4 values already sent (`[0, 1, 1, 2]`) -- matching the
+  server's own log (`cancel request accepted` / `goal canceled after 4
+  values` / `get_result replied: status=5, 4 values`) line for line.
+
+Status: implemented and unit-tested (CDR round-trips for every new message
+type, `xrce/tests/test_msgs.c`/`test_cdr.c`) and verified live against a
+real, unmodified agent, `ros2` CLI, and `rclpy`, as shown above.
+
 ## Later phases
 
-Not started: services/actions (7b), reliable streams/QoS enforcement (7c),
-priority-aware executor (7d), diagnostics (Phase 8), live TUI (Phase 9).
-Tracked at a high level in the top-level project plan; this file gets a new
-dated section per phase as it actually lands, same convention as
+Not started: reliable streams/QoS enforcement (7c), priority-aware
+executor (7d), diagnostics (Phase 8), live TUI (Phase 9). Tracked at a
+high level in the top-level project plan; this file gets a new dated
+section per phase as it actually lands, same convention as
 `rtos/docs/design.md`.
