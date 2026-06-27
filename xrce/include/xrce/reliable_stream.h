@@ -20,7 +20,7 @@
  * this project's demos send is small and bounded -- see
  * XRCE_RELIABLE_MSG_MAX. */
 
-#define XRCE_RELIABLE_WINDOW 8
+#define XRCE_RELIABLE_WINDOW 32
 #define XRCE_RELIABLE_MSG_MAX 256
 
 typedef struct {
