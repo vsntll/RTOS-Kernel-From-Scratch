@@ -12,6 +12,8 @@
 #define XRCE_SUBMSG_WRITE_DATA 7
 #define XRCE_SUBMSG_READ_DATA 8
 #define XRCE_SUBMSG_DATA 9
+#define XRCE_SUBMSG_ACKNACK 10
+#define XRCE_SUBMSG_HEARTBEAT 11
 #define XRCE_FORMAT_DATA 0x00
 
 #define XRCE_FLAG_ENDIANNESS_LE 0x01
@@ -392,4 +394,64 @@ size_t xrce_session_build_delete(xrce_session_t *s, uint8_t stream_id_raw,
 
 bool xrce_session_parse_delete_reply(const uint8_t *buf, size_t len) {
     return parse_status_reply(buf, len);
+}
+
+size_t xrce_session_build_heartbeat(xrce_session_t *s, uint8_t stream_id_raw, uint8_t target_stream_raw,
+                                     uint16_t first_unacked, uint16_t last_sent, uint8_t *buf, size_t cap) {
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, cap);
+
+    /* HEARTBEAT is control traffic for the reliable stream itself, not
+     * data on it: ground-truthed against the reference client's own
+     * write_submessage_heartbeat() (session.c), it always goes out on
+     * message-header stream_id=0 with seq_num literal 0 (not this
+     * session's running out_seq_num counter) -- the *target* reliable
+     * stream is instead identified inside the HEARTBEAT payload itself
+     * (the trailing stream_id byte below). */
+    (void)stream_id_raw;
+    if (!write_message_header(&w, s->session_id, 0, 0, s->client_key)) {
+        return 0;
+    }
+
+    size_t header_pos;
+    if (!submessage_header_at(&w, XRCE_SUBMSG_HEARTBEAT, XRCE_FLAG_ENDIANNESS_LE, &header_pos)) {
+        return 0;
+    }
+
+    size_t payload_start = w.pos;
+    if (!write_u16(&w, first_unacked) || !write_u16(&w, last_sent) ||
+        !xrce_cdr_write_u8(&w, target_stream_raw)) {
+        return 0;
+    }
+
+    backpatch_length(buf, header_pos, w.pos - payload_start);
+    return w.pos;
+}
+
+bool xrce_session_parse_acknack(const uint8_t *buf, size_t len, uint16_t *out_first_unacked,
+                                 uint16_t *out_bitmap) {
+    xrce_cdr_reader_t r;
+    xrce_cdr_reader_init(&r, buf, len);
+    if (!skip_message_header(&r)) {
+        return false;
+    }
+    uint8_t id, flags;
+    uint16_t sub_len;
+    if (!xrce_cdr_read_u8(&r, &id) || !xrce_cdr_read_u8(&r, &flags) || !read_u16(&r, &sub_len)) {
+        return false;
+    }
+    (void)flags;
+    (void)sub_len;
+    if (id != XRCE_SUBMSG_ACKNACK) {
+        return false;
+    }
+    uint8_t bitmap_bytes[2];
+    uint8_t target_stream;
+    if (!read_u16(&r, out_first_unacked) || !xrce_cdr_read_bytes(&r, bitmap_bytes, 2) ||
+        !xrce_cdr_read_u8(&r, &target_stream)) {
+        return false;
+    }
+    (void)target_stream;
+    *out_bitmap = (uint16_t)(bitmap_bytes[0] | ((uint16_t)bitmap_bytes[1] << 8));
+    return true;
 }

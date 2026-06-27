@@ -162,4 +162,36 @@ size_t xrce_session_build_delete(xrce_session_t *s, uint8_t stream_id_raw,
  * as a separate entry point so call sites read as what they're doing. */
 bool xrce_session_parse_delete_reply(const uint8_t *buf, size_t len);
 
+/* Phase 7c: reliable delivery. Raw stream ids partition into none(0) /
+ * best-effort(1-127) / reliable(128-255), ground-truthed against the
+ * reference client's stream_id.c (BEST_EFFORT_STREAM_THRESHOLD=1,
+ * RELIABLE_STREAM_THRESHOLD=128) -- xrce_reliable_stream_raw_id() turns a
+ * 0-based reliable stream index into the wire byte the same way
+ * uxr_stream_id() does. */
+#define XRCE_RELIABLE_STREAM_THRESHOLD 128
+static inline uint8_t xrce_reliable_stream_raw_id(uint8_t index) {
+    return (uint8_t)(index + XRCE_RELIABLE_STREAM_THRESHOLD);
+}
+
+/* Builds a HEARTBEAT submessage: "I have sent everything in
+ * [first_unacked, last_sent] on stream `target_stream_raw`, tell me what's
+ * missing." Payload layout (first_unacked_seq_nr, last_unacked_seq_nr,
+ * stream_id) ground-truthed against xrce_types.h's HEARTBEAT_Payload. */
+size_t xrce_session_build_heartbeat(xrce_session_t *s, uint8_t stream_id_raw, uint8_t target_stream_raw,
+                                     uint16_t first_unacked, uint16_t last_sent, uint8_t *buf, size_t cap);
+
+/* Parses a received ACKNACK: *out_first_unacked is the lowest seq_num the
+ * peer still hasn't seen; *out_bitmap's low bits mark which of the next
+ * few sequence numbers after that are ALSO still missing (0 = only
+ * first_unacked itself is outstanding). This project follows the
+ * reference client's own output_reliable_stream.c strategy (see
+ * uxr_process_acknack()/uxr_next_reliable_nack_buffer_to_send()): a
+ * nonzero bitmap just means "something in the unacked window needs
+ * resending", so the whole window from first_unacked to the last sent
+ * message is retransmitted rather than decoding individual bitmap bits --
+ * the reference client itself doesn't bother with finer-grained partial
+ * retransmission either. */
+bool xrce_session_parse_acknack(const uint8_t *buf, size_t len, uint16_t *out_first_unacked,
+                                 uint16_t *out_bitmap);
+
 #endif
