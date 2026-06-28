@@ -1,0 +1,13 @@
+instructions.md
+
+# build artifacts
+bin/
+obj/
+*.o
+*.out
+*.exe
+
+# editor/OS cruft
+.vscode/
+*.swp
+.DS_Store
