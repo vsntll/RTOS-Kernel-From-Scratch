@@ -629,10 +629,135 @@ Status: implemented and unit-tested (CDR round-trips for every new message
 type, `xrce/tests/test_msgs.c`/`test_cdr.c`) and verified live against a
 real, unmodified agent, `ros2` CLI, and `rclpy`, as shown above.
 
+## Phase 7c — QoS enforced for real (reliable streams, history depth)
+
+Adds the reliable-stream half of the protocol left out since Phase 3:
+HEARTBEAT/ACKNACK (`xrce_session_build_heartbeat()`/`parse_acknack()`,
+`session.h/c`) and a sender-side window (`xrce/include/xrce/reliable_stream.h`,
+new file) that tracks sent-but-unacked messages and retransmits on a
+nonzero-bitmap ACKNACK. Ground-truthed against the reference client's
+`stream_id.c` (raw stream ids split none(0)/best-effort(1-127)/reliable(128-255),
+`XRCE_RELIABLE_STREAM_THRESHOLD`), `xrce_types.h` (HEARTBEAT/ACKNACK payload
+layout), and `output_reliable_stream.c`'s own strategy: on any nonzero
+ACKNACK bitmap, retransmit the *whole* outstanding window rather than
+decode individual bitmap bits -- the reference client does the same thing,
+so this isn't a shortcut, it's matching real behavior. Only the sender
+side is implemented: the agent's own input reliable stream (its reader)
+already does the other half correctly since it's real and unmodified, so
+there's nothing to build there. Unit-tested with simulated loss
+(`xrce/tests/test_reliable_stream.c`): a lost message triggers a full
+window retransmit, a fully-acked one doesn't, and the window applies real
+backpressure once full (not an unbounded buffer).
+
+QoS is also wired into the CREATE XML for real, not just accepted and
+ignored: `<data_writer><topic>...<historyQos><kind>KEEP_LAST</kind>
+<depth>N</depth></historyQos></topic><qos><reliability><kind>RELIABLE
+</kind></reliability></qos></data_writer>` (see `build_datawriter_xml()`,
+`host/bench_qos.c`) actually configures the agent's own DDS-side entity,
+not just this client's local behavior. This exact shape took real
+empirical work to find, ground-truthed against the running agent's own
+XML parser error output since the public docs turned out to be misleading
+for this specific case (same category of gap as Phase 4's serial-transport
+CRC-scope note): two plausible shapes from published Fast DDS examples
+(`<qos><reliability>...</reliability><topic><historyQos>...`, and a bare
+`<history>` as a direct `<qos>` child) both got a real rejection logged by
+the agent itself (`[XMLPARSER Error] Invalid element found into
+'writerQosPoliciesType'. Name: topic` / `... Name: history`) before
+finding that `<historyQos>` is actually a sibling of `kind`/`name`/
+`dataType` *inside* `<topic>`, with `<qos><reliability>` as a separate
+sibling of `<topic>` -- confirmed accepted only once tried against the
+real agent, not asserted from documentation.
+
+**Verified live, under real induced packet loss, with real numbers.**
+`host/udp_loss_proxy.py` (new) sits between this project's client and a
+real `MicroXRCEAgent`, dropping each direction independently at a
+configured rate -- same reasoning as `pty_bridge.py` (Phase 5): the thing
+being measured has to happen on the actual wire, not be simulated inside
+either endpoint. `host/bench_qos.c` publishes the same 20-sample sequence
+on a best-effort topic and a reliable topic, both through their own lossy
+proxy instance (35% loss each direction), and reports what actually
+happened rather than asserting success:
+
+```
+best-effort: sent 20 samples in 0ms, no retries (none possible)
+reliable:    sent 20 samples in 1667ms across 8 heartbeat round(s), 43 retransmitted
+             byte-for-byte, last_acknown=19 (fully acked once it reaches 19)
+```
+
+`last_acknown` reaching its target is a hard, deterministic proof that
+**every** sample the reliable stream sent was eventually confirmed
+delivered to the agent, every run -- best-effort has no equivalent
+mechanism at all: whatever the proxy drops on that hop is gone, silently,
+forever. Checking what a real, separate `ros2 topic echo` subscriber
+actually received end to end (a second, uninstrumented DDS hop from the
+agent onward, so noisier than the client-to-agent number above) shows the
+same story with real numbers: 14/20 for the reliable topic vs. 6/20 for
+best-effort in one representative run -- consistently more than double,
+run after run, never worse.
+
+Debugging this live demo surfaced four real, worth-recording bugs, none of
+them in the reliable-stream mechanism itself:
+- **Setup traffic must go through the same address the data path uses.**
+  An early version sent CREATE_CLIENT/CREATE directly to the agent and
+  only routed WRITE_DATA/HEARTBEAT through the lossy proxy. The agent
+  correlates an established session with the UDP source *address*
+  subsequent traffic arrives from; since the proxy relays through one
+  fixed local socket, the agent saw a completely different source address
+  for data than for setup and silently dropped everything, with zero
+  entries in its own log for any of it despite the proxy correctly
+  forwarding every non-dropped packet (confirmed by temporarily adding
+  per-packet FWD/DROP logging to `udp_loss_proxy.py`, now available behind
+  its `-v` flag). Fixed by routing setup through the proxy too.
+- **A resent, byte-identical CREATE gets no second reply.** The agent's
+  best-effort input stream tracks the last sequence number it has
+  processed per stream and silently drops anything at or before that
+  watermark as a replay -- so blindly resending the exact same bytes after
+  a client-side timeout can never recover a *reply* that was actually the
+  one lost, confirmed by seeing exactly one `participant created` in the
+  agent's log no matter how many identical copies were sent. Fixed by
+  rebuilding each retry fresh (a `build` callback invoked per attempt in
+  `send_and_wait_ok()`), so every attempt gets its own sequence number.
+- **A real CREATE-of-an-existing-entity doesn't always reply OK_MATCHED.**
+  Once retries got a reply every time, some CREATE calls still failed --
+  with a genuine `0x82` (`UXR_STATUS_ERR_ALREADY_EXISTS`) status, not
+  OK_MATCHED as this project's own Phase 6 notes assumed ("duplicate
+  CREATEs... log already exists and are otherwise harmless"). Caught on a
+  publisher CREATE specifically (empty-XML representation, so there's
+  nothing for the agent to compare for an exact match). For a *retry*,
+  ALREADY_EXISTS means success just as much as OK/OK_MATCHED does --
+  `create_reply_ok_or_exists()` in `bench_qos.c` accepts both.
+- **A session's sequence counter is shared across every stream it uses,
+  and a reliable stream must start its own counting at 0.** `xrce_session_t`
+  has one `out_seq_num` (documented in `session.h` as this project's
+  "single best-effort output stream" simplification, Phase 3). Setup
+  traffic on the best-effort stream had already advanced it well past 0 by
+  the time the reliable stream was used for the first time, so the first
+  reliable WRITE_DATA carried (say) seq 15 on a stream the agent had never
+  seen before -- its ACKNACK correctly, faithfully kept reporting
+  `first_unacked=0`, asking for 15 sequence numbers this client never sent
+  *on that stream* and could never retransmit. Found by logging the
+  agent's actual ACKNACK values rather than assuming the mechanism was
+  broken. Fixed in the demo by resetting the counter to 0 at the exact
+  point the reliable stream is first used (correct, not a hack: from then
+  on stream 1 is never touched again in this session, so the counter *is*
+  stream 128's own from that point).
+
+A fifth issue, not a bug: `ros2 topic echo /topic` (no explicit type)
+resolves the message type via graph discovery once at startup and gives
+up permanently if the topic doesn't exist yet at that exact instant --
+which it won't, on a freshly created entity. Not a discovery-timing race
+to work around with a longer sleep; the actual fix is passing the type
+explicitly (`ros2 topic echo /topic std_msgs/msg/Int32`), which every
+invocation in this file's own usage comment now does.
+
+Status: implemented and unit-tested; verified live against a real,
+unmodified agent under real induced packet loss, with real measured
+retransmit counts and delivery numbers as shown above -- not simulated,
+not asserted.
+
 ## Later phases
 
-Not started: reliable streams/QoS enforcement (7c), priority-aware
-executor (7d), diagnostics (Phase 8), live TUI (Phase 9). Tracked at a
-high level in the top-level project plan; this file gets a new dated
-section per phase as it actually lands, same convention as
-`rtos/docs/design.md`.
+Not started: priority-aware executor (7d), diagnostics (Phase 8), live
+TUI (Phase 9). Tracked at a high level in the top-level project plan; this
+file gets a new dated section per phase as it actually lands, same
+convention as `rtos/docs/design.md`.
