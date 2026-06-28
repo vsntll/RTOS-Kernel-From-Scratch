@@ -316,6 +316,32 @@ GetResult request that needs to be held rather than polled, and a demo
 bug that permanently rejected goals after the first one completed) are
 recorded in full in `xrce/docs/design.md`'s Phase 7b section.
 
+**Phase 7c — QoS enforced for real, verified under real induced packet
+loss.** Adds the reliable-stream half of the protocol (HEARTBEAT/ACKNACK,
+`session.h/c`) and a sender-side retransmit window
+(`xrce/include/xrce/reliable_stream.h`) — only the sender side, since the
+agent's own input reliable stream already implements the reader side
+correctly. `host/udp_loss_proxy.py` (new, same idea as `pty_bridge.py`)
+sits between the client and a real agent, dropping 35% of datagrams each
+direction; `host/bench_qos.c` publishes 20 samples on a best-effort topic
+and a reliable one through it. The reliable stream's own delivery
+confirmation (`last_acknown` reaching its target) is 100% every run — a
+hard proof every sample reached the agent, with real measured cost (e.g.
+43 retransmits, 8 heartbeat rounds in one run) — while best-effort has no
+recovery mechanism at all. A real, separate `ros2 topic echo` subscriber
+downstream (a second, uninstrumented DDS hop) sees the same story with
+real numbers: 14/20 for reliable vs. 6/20 for best-effort in one run,
+consistently more than double across repeated runs. QoS is also wired
+into the real DDS entity via CREATE XML (`<historyQos>` inside `<topic>`,
+`<qos><reliability>` as its sibling — a shape found only by reading the
+agent's own XML-parser rejection log, since two plausible shapes from
+public FastDDS docs were both rejected). Four real bugs surfaced building
+this — session/address correlation, replay-protected duplicate CREATEs,
+a real ALREADY_EXISTS status this project had assumed away, and a
+shared-vs-per-stream sequence counter mismatch — each found by reading the
+agent's own log/ACKNACK values rather than assumed, full account in
+`xrce/docs/design.md`'s Phase 7c section.
+
 **Phase 6 — latency, throughput, and fault handling, measured rather than
 estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
 out on `rt/pong`; `host/bench_latency.c` times the real round trip through
@@ -378,7 +404,7 @@ rtos/
   Makefile
 
 xrce/                       # Micro XRCE-DDS client layer (Option A), portable/OS-independent
-  include/xrce/              # serial_transport.h, cdr.h, msgs.h, session.h
+  include/xrce/              # serial_transport.h, cdr.h, msgs.h, session.h, reliable_stream.h
   src/                        # matching .c implementations
   tests/                      # host-native unit tests, own Makefile (same pattern as rtos/)
   docs/design.md              # ground truth notes, phase-by-phase status
@@ -389,8 +415,13 @@ host/                        # host-side scripts and live-agent test programs
   live_agent_check.c          # manual: CREATE_CLIENT against a real MicroXRCEAgent
   live_publish_demo.c         # manual: full entity-creation + publish loop against a real agent
   live_subscribe_demo.c       # manual: subscription, driven live by `ros2 topic pub`
+  live_delete_demo.c          # Phase 7a: DELETE, verified live against ros2 topic list
+  live_service_demo.c         # Phase 7b: Replier answering a real ros2 service call
+  live_action_demo.c          # Phase 7b: full Fibonacci action server (goal/feedback/cancel/result)
   pty_bridge.py               # debug tool: tees QEMU<->agent serial traffic (see xrce/docs/design.md)
+  udp_loss_proxy.py           # Phase 7c: induces known packet loss for QoS testing
   bench_latency.c             # Phase 6: real host<->RTOS round-trip latency + burst-loss benchmark
+  bench_qos.c                 # Phase 7c: reliable-vs-best-effort delivery under induced loss
 ```
 
 ## Kernel API (summary)
@@ -448,8 +479,10 @@ top of the kernel above, not part of it:**
 - [x] Phase 7b — Services (`ros2 service call` answered by a real Replier)
       and actions (`ros2 action send_goal` with real feedback, result, and
       cancellation, verified against the CLI and `rclpy` directly)
-- [ ] Phase 7c — QoS profiles (reliable vs. best-effort, history depth)
-      enforced for real under induced packet loss
+- [x] Phase 7c — QoS (reliable streams, history depth) enforced for real:
+      verified live under 35% induced packet loss with a real loss proxy,
+      100% delivery confirmed to the agent on the reliable stream every
+      run vs. no recovery at all for best-effort
 - [ ] Phase 7d — Priority-aware executor dispatching callbacks via the
       RTOS's real priority scheduler
 - [ ] Phase 8 — Live diagnostics exposed as ROS2 topics/services
