@@ -1,9 +1,11 @@
 instructions.md
 
 # build artifacts
+build/
 bin/
 obj/
 *.o
+*.a
 *.out
 *.exe
 
