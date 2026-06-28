@@ -197,8 +197,40 @@ static size_t build_create_cb(void *vctx, uint8_t *buf, size_t cap) {
  * sample data being measured fixed it). Only the datawriter itself is
  * created on `stream_id_raw` so its declared stream_id matches what
  * WRITE_DATA/HEARTBEAT will actually use. */
+/* QoS on the underlying DDS entity itself (Phase 7c): applied via the
+ * datawriter's XML, not just this project's own client<->agent reliable
+ * stream, so the agent's real DDS-side entity actually gets configured to
+ * match -- e.g. `ros2 topic info -v` reports the requested profile, and
+ * FastDDS's own RTPS-level reliability covers the agent<->subscriber hop
+ * this project's client never touches. History depth is a real, wired-in
+ * setting too (not accepted-and-ignored): it governs how many samples the
+ * agent's own writer retains for a late-joining/re-matching reader.
+ *
+ * XML shape ground-truthed empirically against a real agent, not the
+ * (misleading, for this exact case) general FastDDS docs -- <historyQos>
+ * is a sibling of kind/name/dataType *inside* <topic>, not nested under
+ * <qos>; <qos><reliability> is a separate sibling of <topic>. Two
+ * variations that looked plausible from public examples
+ * (<qos><...><topic><historyQos>.../qos>, and a bare <history> as a
+ * direct <qos> child) both got a real XMLPARSER rejection from the
+ * agent's own log ("Invalid element found into 'writerQosPoliciesType'")
+ * before this shape was found to work. */
+static bool build_datawriter_xml(char *out, size_t out_cap, const char *topic_name,
+                                  const char *reliability_kind, uint32_t history_depth) {
+    return snprintf(out, out_cap,
+                     "<dds><data_writer>"
+                     "<topic><kind>NO_KEY</kind><name>rt/%s</name>"
+                     "<dataType>std_msgs::msg::dds_::Int32_</dataType>"
+                     "<historyQos><kind>KEEP_LAST</kind><depth>%u</depth></historyQos>"
+                     "</topic>"
+                     "<qos><reliability><kind>%s</kind></reliability></qos>"
+                     "</data_writer></dds>",
+                     topic_name, history_depth, reliability_kind) > 0;
+}
+
 static bool setup_session(xrce_session_t *s, int fd, struct sockaddr_in *addr, uint8_t key_seed,
-                           const char *topic_name, xrce_object_id_t *out_datawriter_id) {
+                           const char *topic_name, const char *reliability_kind, uint32_t history_depth,
+                           xrce_object_id_t *out_datawriter_id) {
     uint8_t key[4] = {key_seed, key_seed, key_seed, key_seed};
     xrce_session_init(s, 0x01, key, 512);
 
@@ -251,10 +283,7 @@ static bool setup_session(xrce_session_t *s, int fd, struct sockaddr_in *addr, u
 
     *out_datawriter_id = xrce_object_id(0x001, XRCE_OBJK_DATAWRITER);
     char dw_xml[384];
-    snprintf(dw_xml, sizeof(dw_xml),
-             "<dds><data_writer><topic><kind>NO_KEY</kind><name>rt/%s</name>"
-             "<dataType>std_msgs::msg::dds_::Int32_</dataType></topic></data_writer></dds>",
-             topic_name);
+    build_datawriter_xml(dw_xml, sizeof(dw_xml), topic_name, reliability_kind, history_depth);
     create_ctx_t writer_ctx = {.s = s,
                                 .stream_id_raw = BEST_EFFORT_STREAM_RAW,
                                 .object_id = *out_datawriter_id,
@@ -294,12 +323,14 @@ int main(int argc, char **argv) {
     xrce_session_t be_session, rel_session;
     xrce_object_id_t be_writer, rel_writer;
     printf("--- best-effort session ---\n");
-    if (!setup_session(&be_session, be_fd, &be_addr, 0xB0, "qos_best_effort", &be_writer)) {
+    if (!setup_session(&be_session, be_fd, &be_addr, 0xB0, "qos_best_effort", "BEST_EFFORT", 10,
+                        &be_writer)) {
         return 1;
     }
     printf("--- reliable session ---\n");
     uint8_t reliable_stream_raw = xrce_reliable_stream_raw_id(0);
-    if (!setup_session(&rel_session, rel_fd, &rel_addr, 0xB1, "qos_reliable", &rel_writer)) {
+    if (!setup_session(&rel_session, rel_fd, &rel_addr, 0xB1, "qos_reliable", "RELIABLE", 30,
+                        &rel_writer)) {
         return 1;
     }
 
