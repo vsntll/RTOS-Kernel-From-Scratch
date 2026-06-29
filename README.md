@@ -152,7 +152,7 @@ Full parameter details, return codes, and internal data structures are in
 This kernel was built incrementally; each phase is a working, testable
 milestone rather than a big-bang implementation:
 
-- [ ] Phase 1 — Task representation and context switching
+- [x] Phase 1 — Task representation and context switching
 - [ ] Phase 2 — Cooperative scheduler
 - [ ] Phase 3 — Preemption via timer interrupt
 - [ ] Phase 4 — Priority scheduling + priority inversion fix
