@@ -31,9 +31,15 @@ typedef struct task {
 
 /* Allocates a stack and sets up an initial context so that when the task
  * is first switched to, it starts executing `entry(arg)`. The task starts
- * in TASK_READY state; nothing runs until something switches to it. */
+ * in TASK_READY state; nothing runs until something switches to it.
+ *
+ * `return_ctx` is where control goes if `entry` ever returns (NULL means
+ * the process exits, per ucontext's default uc_link behavior). It must be
+ * passed in here rather than set on task->context afterwards: glibc's
+ * makecontext() bakes uc_link into the trampoline at call time, so
+ * assigning task->context.uc_link post-creation is silently ignored. */
 task_t *task_create(const char *name, task_entry_t entry, void *arg,
-                     int priority, size_t stack_size);
+                     int priority, size_t stack_size, ucontext_t *return_ctx);
 
 void task_destroy(task_t *task);
 

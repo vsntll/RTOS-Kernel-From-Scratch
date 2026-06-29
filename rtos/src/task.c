@@ -20,7 +20,7 @@ static void task_trampoline(unsigned int hi, unsigned int lo) {
 }
 
 task_t *task_create(const char *name, task_entry_t entry, void *arg,
-                     int priority, size_t stack_size) {
+                     int priority, size_t stack_size, ucontext_t *return_ctx) {
     if (stack_size == 0) {
         stack_size = TASK_DEFAULT_STACK_SIZE;
     }
@@ -55,9 +55,9 @@ task_t *task_create(const char *name, task_entry_t entry, void *arg,
     }
     task->context.uc_stack.ss_sp = task->stack;
     task->context.uc_stack.ss_size = task->stack_size;
-    /* Left NULL: whoever queues this task (scheduler, or a manual demo)
-     * decides where control goes if the task's entry function returns. */
-    task->context.uc_link = NULL;
+    /* Must happen before makecontext() -- see the note on return_ctx in
+     * task.h for why setting this afterwards doesn't work. */
+    task->context.uc_link = return_ctx;
 
     uint64_t packed = (uint64_t)(uintptr_t)task;
     unsigned int hi = (unsigned int)(packed >> 32);
