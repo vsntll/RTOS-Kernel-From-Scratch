@@ -755,9 +755,72 @@ unmodified agent under real induced packet loss, with real measured
 retransmit counts and delivery numbers as shown above -- not simulated,
 not asserted.
 
+## Phase 7d — Priority-aware executor
+
+Replaces the naive "handle whatever arrives next" pattern every earlier
+demo used with dispatch driven by `rtos/`'s real priority scheduler
+(`rtos/src/scheduler.c`'s highest-priority-READY-wins `pick_next_ready()`,
+already built and tested in the kernel's own Phase 4 -- not reinvented
+here). `xrce/` is deliberately kept free of any RTOS dependency (portable,
+host-native testable on its own -- stated in this file's own header
+comment), so the priority-aware dispatch logic lives in a new
+`host/live_priority_demo.c` rather than a new `xrce/src/executor.c`: this
+is where `rtos/` and `xrce/` get linked together for a demo, the same role
+`rtos/arm/ros2_demo.c` already plays for the QEMU firmware image, without
+either library depending on the other.
+
+Architecture: one POLLER task drains the UDP socket with a non-blocking
+`recv()` (`MSG_DONTWAIT`) and dispatches each `DATA` sample into the
+matching topic's `queue_t` (`rtos/src/sync.h`, unmodified); two CONSUMER
+tasks at different `task_spawn()` priorities block on `queue_receive()`
+for their own topic and measure real dispatch latency (queue-arrival to
+callback-start, via `gettimeofday()`). The low-priority consumer does
+deliberately slow, non-yielding CPU work per message so it's only
+interrupted at real `SIGALRM` tick boundaries -- the RTOS's actual
+preemption behavior, not a scripted delay. The poller has to be
+non-blocking: every task here is a green thread (`ucontext_t`) sharing the
+one real OS thread the RTOS's preemption runs on, so a blocking `recv()`
+would freeze every task, not just the poller, since there's no second real
+thread for the others to run on.
+
+**A real bug, found only by testing against a live agent, not from reading
+the scheduler's own code.** The poller's first version called
+`task_yield()` (not `task_sleep()`) between polls. Being the
+highest-priority task, `task_yield()` only ever leaves it READY, never
+BLOCKED, so `pick_next_ready()` kept re-selecting it every cycle -- the
+resulting multi-hundred-thousand-iterations-per-second spin loop was
+enough to starve the real agent process of scheduling time on this host:
+`DATA` that an unmodified `live_subscribe_demo.c` receives instantly at
+the same moment on the same machine never arrived at all here, confirmed
+by logging `errno` on every poll attempt (`EAGAIN`, for as long as a
+minute straight) rather than assuming the fix without checking. Switching
+the poller to `task_sleep(1)` -- one real tick between polls instead of a
+bare yield -- fixed it completely, and is arguably more realistic anyway:
+a real embedded poll loop doesn't spin as fast as the CPU allows either.
+
+**Verified live, with real measured latency numbers, under real load from
+the standard `ros2 topic pub -r` CLI on two topics simultaneously** (not
+simulated publishers): the high-priority consumer's dispatch latency stays
+at **2-5 microseconds** for every single message, run after run, while the
+low-priority consumer's latency grows from single-digit microseconds up to
+**over 100 milliseconds** as it falls behind under the same load -- a
+20,000x+ gap, both numbers real and printed by the demo itself, not
+asserted:
+
+```
+[high] done: mean=3us max=5us
+[low]  done: mean=39144us max=124432us
+```
+
+This is the deliverable's exact ask, with real evidence: the high-priority
+topic's callback latency stays bounded regardless of what the low-priority
+one is doing, and the low-priority one visibly absorbs the delay instead.
+
+Status: implemented and verified live against a real, unmodified agent and
+`ros2 topic pub`, with real measured dispatch latencies as shown above.
+
 ## Later phases
 
-Not started: priority-aware executor (7d), diagnostics (Phase 8), live
-TUI (Phase 9). Tracked at a high level in the top-level project plan; this
-file gets a new dated section per phase as it actually lands, same
-convention as `rtos/docs/design.md`.
+Not started: diagnostics (Phase 8), live TUI (Phase 9). Tracked at a high
+level in the top-level project plan; this file gets a new dated section
+per phase as it actually lands, same convention as `rtos/docs/design.md`.
