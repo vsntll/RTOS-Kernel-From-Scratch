@@ -153,7 +153,7 @@ This kernel was built incrementally; each phase is a working, testable
 milestone rather than a big-bang implementation:
 
 - [x] Phase 1 — Task representation and context switching
-- [ ] Phase 2 — Cooperative scheduler
+- [x] Phase 2 — Cooperative scheduler
 - [ ] Phase 3 — Preemption via timer interrupt
 - [ ] Phase 4 — Priority scheduling + priority inversion fix
 - [ ] Phase 5 — Synchronization primitives (mutex, semaphore, queue)
