@@ -342,6 +342,29 @@ shared-vs-per-stream sequence counter mismatch — each found by reading the
 agent's own log/ACKNACK values rather than assumed, full account in
 `xrce/docs/design.md`'s Phase 7c section.
 
+**Phase 7d — priority-aware executor, verified under real load.**
+Replaces "handle whatever arrives next" with dispatch driven by `rtos/`'s
+real priority scheduler — a non-blocking poller task
+(`host/live_priority_demo.c`) drains the UDP socket and dispatches each
+sample into the matching topic's `queue_t`; two consumer tasks at
+different priorities measure real dispatch latency. `xrce/` stays free of
+any RTOS dependency by design, so this logic lives in `host/`, the same
+place `rtos/` and `xrce/` already get linked for `rtos/arm/ros2_demo.c`.
+Under real load from two simultaneous `ros2 topic pub -r 20` streams, the
+high-priority topic's dispatch latency stays at 2-5us every single
+message while the low-priority one — deliberately doing slow, non-yielding
+work per message — grows past 100ms as it falls behind, a 20,000x+ gap,
+both numbers real:
+```
+[high] done: mean=3us max=5us
+[low]  done: mean=39144us max=124432us
+```
+A real bug (the poller's first version spun fast enough on `task_yield()`
+to starve the real agent process of scheduling time, so data an
+unmodified `live_subscribe_demo.c` receives instantly never arrived at
+all) and its fix (`task_sleep(1)` instead of a bare yield) are recorded in
+full in `xrce/docs/design.md`'s Phase 7d section.
+
 **Phase 6 — latency, throughput, and fault handling, measured rather than
 estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
 out on `rt/pong`; `host/bench_latency.c` times the real round trip through
@@ -418,6 +441,7 @@ host/                        # host-side scripts and live-agent test programs
   live_delete_demo.c          # Phase 7a: DELETE, verified live against ros2 topic list
   live_service_demo.c         # Phase 7b: Replier answering a real ros2 service call
   live_action_demo.c          # Phase 7b: full Fibonacci action server (goal/feedback/cancel/result)
+  live_priority_demo.c        # Phase 7d: priority-aware dispatch, links rtos/ + xrce/ together
   pty_bridge.py               # debug tool: tees QEMU<->agent serial traffic (see xrce/docs/design.md)
   udp_loss_proxy.py           # Phase 7c: induces known packet loss for QoS testing
   bench_latency.c             # Phase 6: real host<->RTOS round-trip latency + burst-loss benchmark
@@ -483,8 +507,9 @@ top of the kernel above, not part of it:**
       verified live under 35% induced packet loss with a real loss proxy,
       100% delivery confirmed to the agent on the reliable stream every
       run vs. no recovery at all for best-effort
-- [ ] Phase 7d — Priority-aware executor dispatching callbacks via the
-      RTOS's real priority scheduler
+- [x] Phase 7d — Priority-aware executor: verified live under real load
+      from `ros2 topic pub -r`, high-priority dispatch latency stays at
+      2-5us while low-priority grows past 100ms absorbing the delay
 - [ ] Phase 8 — Live diagnostics exposed as ROS2 topics/services
 - [ ] Phase 9 — `htop`-style live terminal UI over the diagnostics topic
 
