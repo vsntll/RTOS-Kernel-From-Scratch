@@ -2,7 +2,10 @@
 
 #include "scheduler.h"
 
+#include <signal.h>
 #include <stddef.h>
+#include <string.h>
+#include <sys/time.h>
 #include <ucontext.h>
 
 static task_t *g_tasks[SCHED_MAX_TASKS];
@@ -75,4 +78,94 @@ void task_yield(void) {
         cur->state = TASK_READY;
     }
     swapcontext(&cur->context, &g_sched_ctx);
+}
+
+/* --- Preemption -----------------------------------------------------
+ *
+ * Calling swapcontext() directly from inside the SIGALRM handler works
+ * because POSIX specifies that swapcontext() also saves/restores
+ * uc_sigmask (via an actual sigprocmask syscall, not just an in-memory
+ * copy) -- so jumping to a different task mid-handler still leaves
+ * SIGALRM correctly unblocked, without ever needing a normal handler
+ * return through sigreturn.
+ *
+ * (An earlier version of this tried mutating the kernel-supplied
+ * ucontext_t from a SA_SIGINFO handler's third argument instead, to force
+ * the switch through the sigreturn path. That segfaulted -- the fpregs
+ * pointer inside a signal-frame ucontext_t isn't interchangeable with one
+ * from a plain getcontext()/makecontext() task, so overwriting it wholesale
+ * corrupts FPU state restoration. Plain swapcontext() sidesteps that.) */
+
+static volatile sig_atomic_t g_preempt_enabled = 0;
+static volatile uint64_t g_tick_count = 0;
+static int g_ticks_per_slice = 1;
+static int g_ticks_since_switch = 0;
+static struct sigaction g_prev_sigaction;
+
+static void preempt_handler(int sig) {
+    (void)sig;
+    g_tick_count++;
+
+    if (!g_preempt_enabled || g_current_idx < 0) {
+        return;
+    }
+
+    task_t *cur = g_tasks[g_current_idx];
+    if (cur->state != TASK_RUNNING) {
+        return;
+    }
+
+    g_ticks_since_switch++;
+    if (g_ticks_since_switch < g_ticks_per_slice) {
+        return;
+    }
+    g_ticks_since_switch = 0;
+
+    cur->state = TASK_READY;
+    int next_idx = pick_next_ready();
+    if (next_idx < 0) {
+        /* No other READY task -- nothing to switch to, keep running cur. */
+        cur->state = TASK_RUNNING;
+        return;
+    }
+
+    g_current_idx = next_idx;
+    g_tasks[next_idx]->state = TASK_RUNNING;
+    swapcontext(&cur->context, &g_tasks[next_idx]->context);
+    /* Control resumes here whenever cur is switched back in, at which
+     * point this handler invocation returns normally. */
+}
+
+void scheduler_enable_preemption(int tick_ms, int ticks_per_slice) {
+    g_ticks_per_slice = (ticks_per_slice > 0) ? ticks_per_slice : 1;
+    g_ticks_since_switch = 0;
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = preempt_handler;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGALRM, &sa, &g_prev_sigaction);
+
+    struct itimerval timer;
+    timer.it_value.tv_sec = tick_ms / 1000;
+    timer.it_value.tv_usec = (tick_ms % 1000) * 1000;
+    timer.it_interval = timer.it_value;
+    setitimer(ITIMER_REAL, &timer, NULL);
+
+    g_preempt_enabled = 1;
+}
+
+void scheduler_disable_preemption(void) {
+    g_preempt_enabled = 0;
+
+    struct itimerval timer;
+    memset(&timer, 0, sizeof(timer));
+    setitimer(ITIMER_REAL, &timer, NULL);
+
+    sigaction(SIGALRM, &g_prev_sigaction, NULL);
+}
+
+uint64_t scheduler_tick_count(void) {
+    return g_tick_count;
 }
