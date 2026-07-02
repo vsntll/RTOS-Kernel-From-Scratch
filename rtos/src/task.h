@@ -24,7 +24,7 @@ typedef struct task {
     unsigned char *stack;
     size_t stack_size;
     task_state_t state;
-    int priority;
+    int priority; /* higher value = higher priority */
     task_entry_t entry;
     void *arg;
 } task_t;
