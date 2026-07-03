@@ -819,8 +819,87 @@ one is doing, and the low-priority one visibly absorbs the delay instead.
 Status: implemented and verified live against a real, unmodified agent and
 `ros2 topic pub`, with real measured dispatch latencies as shown above.
 
+## Phase 8 — Diagnostics (Option A: piggyback on ROS2)
+
+Chose Option A (the phase brief's own recommended default) over a second,
+out-of-band protocol: reuses everything built in Phases 1-7d rather than
+inventing new transport, and targets `diagnostic_msgs/msg/DiagnosticArray`
+-- a real, already-installed standard interface (confirmed via `ros2
+interface show diagnostic_msgs/msg/DiagnosticArray`) -- specifically so
+`/rtos/diagnostics` is idiomatic and, in principle, `rqt_robot_monitor`-
+compatible, per the brief's own suggestion. Stated plainly rather than
+overclaimed: `rqt_robot_monitor` itself wasn't independently run against
+this topic in this pass, only confirmed wire-compatible via `ros2 topic
+echo diagnostic_msgs/msg/DiagnosticArray`.
+
+Every field this phase asks for maps onto `DiagnosticStatus.values[]`
+`KeyValue` pairs naturally -- one `DiagnosticStatus` per task, one for
+scheduler-wide stats, one per queue, one for middleware stats -- with real
+data behind every one of them, not placeholders:
+- **Per-task state/priority/stack high-water mark**: state and priority
+  were already tracked (`task_t.state`/`.priority`); high-water mark is
+  new (`task_stack_high_water_mark()`, `rtos/src/task.c`/`.h`) -- the
+  whole stack (beyond the existing bottom-guard canary region) gets
+  poisoned with a *different* byte (`TASK_HWM_POISON_BYTE`, distinct from
+  the canary's, so the two features are never confusable when eyeballing
+  a raw memory dump) at creation, and the accessor scans from the bottom
+  up for the first still-poisoned byte -- the deepest point the stack
+  pointer has ever actually reached. Verified with a real proportional
+  test, not just "nonzero": `rtos/tests/test_diagnostics.c` asserts a
+  40-deep recursive task's HWM is measurably larger than a 2-deep one's,
+  and that a task that never runs has one bounded well under the full
+  stack size.
+- **Scheduler stats**: `scheduler_switch_count()` (`scheduler.c`/`.h`,
+  new) is a real context-switch counter, deliberately distinct from the
+  existing `scheduler_tick_count()` -- a tick doesn't always cause a
+  switch, and a switch can happen without a tick (voluntary
+  `task_yield()`/blocking on a sync primitive), so conflating them would
+  under- or over-count. Incremented at both places a real task-to-task
+  `swapcontext()` happens (`scheduler_run()`'s own dispatch loop and
+  `preempt_handler()`'s forced one), reset by `scheduler_reset()` like
+  every other counter. "Missed deadlines": not tracked, stated honestly
+  rather than invented -- this RTOS has no deadline concept at all yet,
+  only `task_sleep()` wake times.
+- **Queue/mailbox depths**: directly computable from `queue_t`'s existing
+  `head`/`tail`/`capacity` (`(tail - head + capacity) % capacity`) --
+  nothing new needed. **Drop counts**: not implemented -- `queue_send()`
+  blocks rather than drops on a full queue (by design, per `rtos/`'s own
+  producer/consumer semantics), so there is no real drop-count data to
+  report yet; stated as a known gap rather than fabricated.
+- **Middleware-layer stats**: bytes sent, tracked locally in the demo
+  (`g_bytes_sent`, incremented at every real `sendto()`) since no existing
+  library layer tracked this. Retransmits: genuinely 0 in this demo,
+  since it only uses the best-effort stream (7c's reliable stream +
+  retransmit-count tracking exists and is real, just not wired into this
+  particular demo, which values a working live diagnostics loop over
+  needing to *also* stand up a reliable topic just to have a nonzero
+  number to show) -- the `DiagnosticStatus` message for this says so
+  explicitly (`"best-effort only in this demo -- no retransmits
+  possible"`) rather than silently reporting a misleadingly-reassuring 0.
+
+`host/live_diagnostics_demo.c` runs two representative worker tasks (real,
+changing task state to actually observe) plus a publisher task (periodic)
+and a coordinator task (polls for `/rtos/diagnostics/refresh` requests,
+reusing 7b's Requester/Replier machinery completely unmodified).
+
+**Verified live against a real, unmodified agent and `ros2` CLI:**
+`ros2 topic echo /rtos/diagnostics diagnostic_msgs/msg/DiagnosticArray`
+shows real, correct, changing values --
+`stack_high_water_mark_bytes: '584'`/`'536'` for the two worker tasks (not
+equal, reflecting their actually different stack usage), `tick_count` and
+`context_switch_count` climbing in real time, `bytes_sent` growing with
+every publish. `ros2 service call /rtos/diagnostics/refresh
+std_srvs/srv/Trigger` gets a real `success=True, message='refreshed'`
+response and triggers a real, out-of-cycle republish (`refresh requested
+-- republishing` in the server's own log, timed to match).
+
+Status: implemented, unit-tested (`task_stack_high_water_mark()`/
+`scheduler_switch_count()` in `rtos/tests/test_diagnostics.c`, CDR
+round-trip in `xrce/tests/test_msgs.c`), and verified live against a real,
+unmodified agent and `ros2` CLI, both the topic and the service.
+
 ## Later phases
 
-Not started: diagnostics (Phase 8), live TUI (Phase 9). Tracked at a high
+Not started: live TUI (Phase 9). Tracked at a high
 level in the top-level project plan; this file gets a new dated section
 per phase as it actually lands, same convention as `rtos/docs/design.md`.
