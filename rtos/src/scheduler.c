@@ -12,6 +12,7 @@ static task_t *g_tasks[SCHED_MAX_TASKS];
 static int g_num_tasks = 0;
 static int g_current_idx = -1;
 static ucontext_t g_sched_ctx;
+static uint64_t g_switch_count;
 
 void scheduler_add_task(task_t *task) {
     if (g_num_tasks >= SCHED_MAX_TASKS) {
@@ -117,6 +118,7 @@ void scheduler_run(void) {
 
         sigset_t old_mask;
         block_alarm(&old_mask);
+        g_switch_count++;
         swapcontext(&g_sched_ctx, &g_tasks[next]->context);
         restore_mask(&old_mask);
 
@@ -235,6 +237,7 @@ static void preempt_handler(int sig) {
     g_current_idx = next_idx;
     g_tasks[next_idx]->state = TASK_RUNNING;
     cur->pending_preemptions++;
+    g_switch_count++;
     swapcontext(&cur->context, &g_tasks[next_idx]->context);
     /* Control resumes here whenever cur is switched back in, at which
      * point this handler invocation returns normally. */
@@ -276,6 +279,10 @@ uint64_t scheduler_tick_count(void) {
     return g_tick_count;
 }
 
+uint64_t scheduler_switch_count(void) {
+    return g_switch_count;
+}
+
 void task_sleep(int ms) {
     if (g_current_idx < 0 || ms <= 0) {
         return;
@@ -298,4 +305,5 @@ void scheduler_reset(void) {
     g_current_idx = -1;
     g_tick_count = 0;
     g_ticks_since_switch = 0;
+    g_switch_count = 0;
 }

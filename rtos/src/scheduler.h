@@ -35,6 +35,15 @@ void scheduler_enable_preemption(int tick_ms, int ticks_per_slice);
 void scheduler_disable_preemption(void);
 uint64_t scheduler_tick_count(void);
 
+/* Phase 8: real context-switch count for live diagnostics -- distinct
+ * from scheduler_tick_count(), since a tick doesn't always cause a
+ * switch (the running task might still be the only READY one) and a
+ * switch can happen without a tick (a voluntary task_yield() or a task
+ * blocking on a sync primitive). Counts every swapcontext() that hands
+ * control to a *different* task, whether voluntary (scheduler_run()'s
+ * own dispatch loop) or forced (preempt_handler()). */
+uint64_t scheduler_switch_count(void);
+
 /* Blocks the current task until at least `ms` milliseconds of ticks have
  * elapsed. Requires scheduler_enable_preemption() to be active -- ticks
  * (and therefore sleep wakeups) only advance while the timer is running. */

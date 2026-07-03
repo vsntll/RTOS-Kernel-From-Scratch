@@ -69,6 +69,17 @@ void task_destroy(task_t *task);
  * means the task overflowed (or, less commonly, underflowed) its stack. */
 int task_canary_ok(const task_t *task);
 
+/* Phase 8: peak stack bytes actually used, for live diagnostics. The
+ * whole stack (beyond the existing canary region) is poisoned with
+ * TASK_HWM_POISON_BYTE at creation; this scans from the bottom (low
+ * address -- deepest possible usage) up for the first still-poisoned
+ * byte, which marks how deep the stack pointer has ever actually
+ * reached. A different poison byte than the canary's, deliberately, so
+ * a corrupted-canary abort and ordinary HWM tracking are never
+ * confusable when eyeballing a raw memory dump. */
+#define TASK_HWM_POISON_BYTE 0xA6
+size_t task_stack_high_water_mark(const task_t *task);
+
 /* Convenience for call sites that want to fail loudly and immediately
  * rather than handle corruption -- prints which task and aborts. */
 void task_check_canary_or_abort(const task_t *task);

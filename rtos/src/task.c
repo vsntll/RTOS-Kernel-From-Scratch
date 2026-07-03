@@ -53,6 +53,15 @@ task_t *task_create(const char *name, task_entry_t entry, void *arg,
         free(task);
         return NULL;
     }
+    /* High-water-mark poison first, across the whole stack, THEN the
+     * canary bytes on top of its bottom region -- order matters, since
+     * task_stack_high_water_mark() needs the canary region to still read
+     * as TASK_CANARY_BYTE, not TASK_HWM_POISON_BYTE (it skips that region
+     * explicitly rather than relying on which poison value happens to be
+     * there, but keeping the actual bytes correct avoids the two features
+     * silently depending on write order elsewhere). */
+    memset(task->stack, TASK_HWM_POISON_BYTE, task->stack_size);
+
     /* Bottom guard only -- see task_canary_ok() for why a "top" guard at
      * this end of the buffer doesn't work (makecontext(), called below,
      * writes into it immediately as part of setting up the initial
@@ -104,6 +113,21 @@ int task_canary_ok(const task_t *task) {
         }
     }
     return 1;
+}
+
+size_t task_stack_high_water_mark(const task_t *task) {
+    if (task->stack_size < 2 * TASK_CANARY_SIZE) {
+        return task->stack_size; /* too small to have meaningful poisoning at all */
+    }
+    for (size_t i = TASK_CANARY_SIZE; i < task->stack_size; i++) {
+        if (task->stack[i] != TASK_HWM_POISON_BYTE) {
+            /* First still-untouched byte scanning from the bottom up --
+             * everything from here to the top has been used at some
+             * point, so this is exactly how deep usage has ever reached. */
+            return task->stack_size - i;
+        }
+    }
+    return 0; /* never ran deep enough to touch anything below the canary region */
 }
 
 void task_check_canary_or_abort(const task_t *task) {
