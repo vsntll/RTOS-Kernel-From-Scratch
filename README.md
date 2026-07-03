@@ -365,6 +365,28 @@ unmodified `live_subscribe_demo.c` receives instantly never arrived at
 all) and its fix (`task_sleep(1)` instead of a bare yield) are recorded in
 full in `xrce/docs/design.md`'s Phase 7d section.
 
+**Phase 8 — live diagnostics, piggybacked on ROS2 itself.**
+`/rtos/diagnostics` publishes a real, standard
+`diagnostic_msgs/msg/DiagnosticArray` — chosen (Option A from the phase
+brief) so it's idiomatic and, in principle, `rqt_robot_monitor`-compatible,
+reusing every transport/protocol piece built through Phase 7d instead of a
+second out-of-band channel. `rtos/` gained two small, real additions to
+have genuine data to report: `task_stack_high_water_mark()`
+(`task.c`/`.h` — the whole stack gets poisoned at creation, distinct from
+the existing overflow-guard canary, and the accessor finds the deepest
+point ever actually reached) and `scheduler_switch_count()`
+(`scheduler.c`/`.h` — a real context-switch counter, deliberately not the
+same thing as the existing tick counter). Queue depths come straight from
+`queue_t`'s existing fields; middleware bytes-sent is tracked locally in
+the demo. `ros2 topic echo /rtos/diagnostics
+diagnostic_msgs/msg/DiagnosticArray` shows real, different stack
+high-water marks per task and climbing tick/switch counts in real time;
+`ros2 service call /rtos/diagnostics/refresh std_srvs/srv/Trigger` (reusing
+7b's Requester/Replier machinery unchanged) gets a real response and
+triggers a real out-of-cycle republish. What isn't tracked (queue drop
+counts, missed deadlines) is stated as a known gap rather than invented —
+full account in `xrce/docs/design.md`'s Phase 8 section.
+
 **Phase 6 — latency, throughput, and fault handling, measured rather than
 estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
 out on `rt/pong`; `host/bench_latency.c` times the real round trip through
@@ -442,6 +464,7 @@ host/                        # host-side scripts and live-agent test programs
   live_service_demo.c         # Phase 7b: Replier answering a real ros2 service call
   live_action_demo.c          # Phase 7b: full Fibonacci action server (goal/feedback/cancel/result)
   live_priority_demo.c        # Phase 7d: priority-aware dispatch, links rtos/ + xrce/ together
+  live_diagnostics_demo.c     # Phase 8: /rtos/diagnostics + refresh service, real task/scheduler stats
   pty_bridge.py               # debug tool: tees QEMU<->agent serial traffic (see xrce/docs/design.md)
   udp_loss_proxy.py           # Phase 7c: induces known packet loss for QoS testing
   bench_latency.c             # Phase 6: real host<->RTOS round-trip latency + burst-loss benchmark
@@ -510,7 +533,9 @@ top of the kernel above, not part of it:**
 - [x] Phase 7d — Priority-aware executor: verified live under real load
       from `ros2 topic pub -r`, high-priority dispatch latency stays at
       2-5us while low-priority grows past 100ms absorbing the delay
-- [ ] Phase 8 — Live diagnostics exposed as ROS2 topics/services
+- [x] Phase 8 — Live diagnostics exposed as ROS2 topics/services: verified
+      live, real task/scheduler/queue stats via `ros2 topic echo` and a
+      real `ros2 service call` refresh
 - [ ] Phase 9 — `htop`-style live terminal UI over the diagnostics topic
 
 ## Troubleshooting
