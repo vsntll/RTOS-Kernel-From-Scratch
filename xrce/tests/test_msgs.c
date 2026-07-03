@@ -218,6 +218,47 @@ static void case_cancel_goal_round_trip(void) {
                    XRCE_MSGS_UUID_SIZE) == 0);
 }
 
+static void case_diagnostic_array_round_trip(void) {
+    diagnostic_msgs_DiagnosticArray in = {0};
+    in.header.stamp.sec = 10;
+    in.header.stamp.nanosec = 20;
+    strcpy(in.header.frame_id, "rtos");
+    in.status_count = 2;
+
+    in.status[0].level = DIAGNOSTIC_STATUS_OK;
+    strcpy(in.status[0].name, "task/high");
+    strcpy(in.status[0].message, "RUNNING");
+    strcpy(in.status[0].hardware_id, "rtos");
+    in.status[0].values_count = 2;
+    strcpy(in.status[0].values[0].key, "priority");
+    strcpy(in.status[0].values[0].value, "50");
+    strcpy(in.status[0].values[1].key, "stack_hwm");
+    strcpy(in.status[0].values[1].value, "1024");
+
+    in.status[1].level = DIAGNOSTIC_STATUS_WARN;
+    strcpy(in.status[1].name, "task/low");
+    strcpy(in.status[1].message, "BLOCKED");
+    strcpy(in.status[1].hardware_id, "rtos");
+    in.status[1].values_count = 0;
+
+    uint8_t buf[1024];
+    size_t len;
+    assert(diagnostic_msgs_DiagnosticArray_encode(&in, buf, sizeof(buf), &len));
+
+    diagnostic_msgs_DiagnosticArray out;
+    assert(diagnostic_msgs_DiagnosticArray_decode(buf, len, &out));
+    assert(out.header.stamp.sec == 10 && out.header.stamp.nanosec == 20);
+    assert(strcmp(out.header.frame_id, "rtos") == 0);
+    assert(out.status_count == 2);
+    assert(out.status[0].level == DIAGNOSTIC_STATUS_OK);
+    assert(strcmp(out.status[0].name, "task/high") == 0);
+    assert(out.status[0].values_count == 2);
+    assert(strcmp(out.status[0].values[1].key, "stack_hwm") == 0);
+    assert(strcmp(out.status[0].values[1].value, "1024") == 0);
+    assert(out.status[1].level == DIAGNOSTIC_STATUS_WARN);
+    assert(out.status[1].values_count == 0);
+}
+
 int main(void) {
     run_case("std_msgs/Int32 round trip", case_int32_round_trip);
     run_case("std_msgs/String round trip", case_string_round_trip);
@@ -230,6 +271,7 @@ int main(void) {
     run_case("Fibonacci FeedbackMessage round trip", case_feedback_message_round_trip);
     run_case("action_msgs/GoalStatusArray round trip", case_goal_status_array_round_trip);
     run_case("action_msgs/CancelGoal request/response round trip", case_cancel_goal_round_trip);
+    run_case("diagnostic_msgs/DiagnosticArray round trip", case_diagnostic_array_round_trip);
 
     printf("PASS: %d test cases\n", g_tests_run);
     return 0;

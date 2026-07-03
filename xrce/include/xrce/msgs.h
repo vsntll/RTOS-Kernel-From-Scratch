@@ -209,4 +209,46 @@ bool action_msgs_CancelGoal_Response_encode(const action_msgs_CancelGoal_Respons
 bool action_msgs_CancelGoal_Response_decode(const uint8_t *buf, size_t len,
                                              action_msgs_CancelGoal_Response *out);
 
+/* Phase 8: diagnostic_msgs/msg/DiagnosticArray -- a real, already-installed
+ * standard interface (confirmed via `ros2 interface show
+ * diagnostic_msgs/msg/DiagnosticArray`), chosen so `/rtos/diagnostics`
+ * is idiomatic and, in principle, `rqt_robot_monitor`-compatible, per the
+ * phase brief's own suggestion, rather than a custom message type. Field
+ * layout: Header{Time stamp; string frame_id} header;
+ * DiagnosticStatus{byte level; string name/message/hardware_id;
+ * KeyValue[] values} status[]. */
+#define XRCE_MSGS_KV_MAX 8
+#define XRCE_MSGS_DIAG_STATUS_MAX 16
+#define XRCE_MSGS_DIAG_STR_MAX 64
+
+#define DIAGNOSTIC_STATUS_OK 0
+#define DIAGNOSTIC_STATUS_WARN 1
+#define DIAGNOSTIC_STATUS_ERROR 2
+#define DIAGNOSTIC_STATUS_STALE 3
+
+typedef struct {
+    char key[XRCE_MSGS_DIAG_STR_MAX];
+    char value[XRCE_MSGS_DIAG_STR_MAX];
+} diagnostic_msgs_KeyValue;
+
+typedef struct {
+    uint8_t level;
+    char name[XRCE_MSGS_DIAG_STR_MAX];
+    char message[XRCE_MSGS_DIAG_STR_MAX];
+    char hardware_id[XRCE_MSGS_DIAG_STR_MAX];
+    diagnostic_msgs_KeyValue values[XRCE_MSGS_KV_MAX];
+    uint32_t values_count;
+} diagnostic_msgs_DiagnosticStatus;
+
+typedef struct {
+    std_msgs_Header header;
+    diagnostic_msgs_DiagnosticStatus status[XRCE_MSGS_DIAG_STATUS_MAX];
+    uint32_t status_count;
+} diagnostic_msgs_DiagnosticArray;
+
+bool diagnostic_msgs_DiagnosticArray_encode(const diagnostic_msgs_DiagnosticArray *msg, uint8_t *buf,
+                                             size_t cap, size_t *out_len);
+bool diagnostic_msgs_DiagnosticArray_decode(const uint8_t *buf, size_t len,
+                                             diagnostic_msgs_DiagnosticArray *out);
+
 #endif

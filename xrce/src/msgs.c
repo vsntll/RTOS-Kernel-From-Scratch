@@ -362,6 +362,86 @@ bool action_msgs_CancelGoal_Response_encode(const action_msgs_CancelGoal_Respons
     return true;
 }
 
+static bool write_key_value(xrce_cdr_writer_t *w, const diagnostic_msgs_KeyValue *kv) {
+    return xrce_cdr_write_string(w, kv->key) && xrce_cdr_write_string(w, kv->value);
+}
+
+static bool read_key_value(xrce_cdr_reader_t *r, diagnostic_msgs_KeyValue *kv) {
+    return xrce_cdr_read_string(r, kv->key, sizeof(kv->key)) &&
+           xrce_cdr_read_string(r, kv->value, sizeof(kv->value));
+}
+
+static bool write_diagnostic_status(xrce_cdr_writer_t *w, const diagnostic_msgs_DiagnosticStatus *s) {
+    if (!xrce_cdr_write_u8(w, s->level) || !xrce_cdr_write_string(w, s->name) ||
+        !xrce_cdr_write_string(w, s->message) || !xrce_cdr_write_string(w, s->hardware_id) ||
+        !xrce_cdr_write_u32(w, s->values_count)) {
+        return false;
+    }
+    for (uint32_t i = 0; i < s->values_count; i++) {
+        if (!write_key_value(w, &s->values[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool read_diagnostic_status(xrce_cdr_reader_t *r, diagnostic_msgs_DiagnosticStatus *s) {
+    uint8_t level;
+    uint32_t count;
+    if (!xrce_cdr_read_u8(r, &level) || !xrce_cdr_read_string(r, s->name, sizeof(s->name)) ||
+        !xrce_cdr_read_string(r, s->message, sizeof(s->message)) ||
+        !xrce_cdr_read_string(r, s->hardware_id, sizeof(s->hardware_id)) ||
+        !xrce_cdr_read_u32(r, &count) || count > XRCE_MSGS_KV_MAX) {
+        return false;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        if (!read_key_value(r, &s->values[i])) {
+            return false;
+        }
+    }
+    s->level = level;
+    s->values_count = count;
+    return true;
+}
+
+bool diagnostic_msgs_DiagnosticArray_encode(const diagnostic_msgs_DiagnosticArray *msg, uint8_t *buf,
+                                             size_t cap, size_t *out_len) {
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, cap);
+    if (!xrce_cdr_write_header(&w) || !xrce_cdr_write_i32(&w, msg->header.stamp.sec) ||
+        !xrce_cdr_write_u32(&w, msg->header.stamp.nanosec) ||
+        !xrce_cdr_write_string(&w, msg->header.frame_id) || !xrce_cdr_write_u32(&w, msg->status_count)) {
+        return false;
+    }
+    for (uint32_t i = 0; i < msg->status_count; i++) {
+        if (!write_diagnostic_status(&w, &msg->status[i])) {
+            return false;
+        }
+    }
+    *out_len = w.pos;
+    return true;
+}
+
+bool diagnostic_msgs_DiagnosticArray_decode(const uint8_t *buf, size_t len,
+                                             diagnostic_msgs_DiagnosticArray *out) {
+    xrce_cdr_reader_t r;
+    xrce_cdr_reader_init(&r, buf, len);
+    uint32_t count;
+    if (!xrce_cdr_read_header(&r) || !xrce_cdr_read_i32(&r, &out->header.stamp.sec) ||
+        !xrce_cdr_read_u32(&r, &out->header.stamp.nanosec) ||
+        !xrce_cdr_read_string(&r, out->header.frame_id, sizeof(out->header.frame_id)) ||
+        !xrce_cdr_read_u32(&r, &count) || count > XRCE_MSGS_DIAG_STATUS_MAX) {
+        return false;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        if (!read_diagnostic_status(&r, &out->status[i])) {
+            return false;
+        }
+    }
+    out->status_count = count;
+    return true;
+}
+
 bool action_msgs_CancelGoal_Response_decode(const uint8_t *buf, size_t len,
                                              action_msgs_CancelGoal_Response *out) {
     xrce_cdr_reader_t r;
