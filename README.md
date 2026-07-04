@@ -387,6 +387,28 @@ triggers a real out-of-cycle republish. What isn't tracked (queue drop
 counts, missed deadlines) is stated as a known gap rather than invented —
 full account in `xrce/docs/design.md`'s Phase 8 section.
 
+**Phase 9 — a live terminal UI, verified with a real captured screen.**
+`host/rtos_top.py` — Python + the standard-library `curses` module (a
+real ncurses binding; this WSL image is missing the `libncurses-dev`
+headers a C build would need, with no non-interactive `sudo` available to
+install them, confirmed rather than assumed) and `rclpy` directly, since
+`/rtos/diagnostics` is already a real standard ROS2 topic after Phase 8 —
+renders an `htop`-style live table from it. `host/live_priority_demo.c`
+(Phase 7d) gained its own `/rtos/diagnostics` publisher and now runs
+continuous rounds instead of exiting after one (a real bug found getting
+this working: the original one-shot benchmark finished, on an unloaded
+link, faster than a fresh `rclpy` subscriber's own discovery time, so the
+TUI would just show "waiting" forever) — so the tool can watch the actual
+Phase 7d priority-load scenario live, not a separate stand-in for it.
+Verified by capturing the real terminal screen (via `script`, since
+curses needs a real pty) while a real agent, the priority demo, and two
+real `ros2 topic pub -r 20` publishers all ran concurrently: the rendered
+table shows real, correct values updating live — task states genuinely
+flipping between `READY` and `BLOCKED` frame to frame as the low-priority
+task falls in and out of contention, a moving picture of the exact
+scheduling behavior Phase 7d measured numerically. Full account, including
+the discovery-race bug, in `xrce/docs/design.md`'s Phase 9 section.
+
 **Phase 6 — latency, throughput, and fault handling, measured rather than
 estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
 out on `rt/pong`; `host/bench_latency.c` times the real round trip through
@@ -465,6 +487,7 @@ host/                        # host-side scripts and live-agent test programs
   live_action_demo.c          # Phase 7b: full Fibonacci action server (goal/feedback/cancel/result)
   live_priority_demo.c        # Phase 7d: priority-aware dispatch, links rtos/ + xrce/ together
   live_diagnostics_demo.c     # Phase 8: /rtos/diagnostics + refresh service, real task/scheduler stats
+  rtos_top.py                 # Phase 9: htop-style live TUI over /rtos/diagnostics (rclpy + curses)
   pty_bridge.py               # debug tool: tees QEMU<->agent serial traffic (see xrce/docs/design.md)
   udp_loss_proxy.py           # Phase 7c: induces known packet loss for QoS testing
   bench_latency.c             # Phase 6: real host<->RTOS round-trip latency + burst-loss benchmark
@@ -536,7 +559,9 @@ top of the kernel above, not part of it:**
 - [x] Phase 8 — Live diagnostics exposed as ROS2 topics/services: verified
       live, real task/scheduler/queue stats via `ros2 topic echo` and a
       real `ros2 service call` refresh
-- [ ] Phase 9 — `htop`-style live terminal UI over the diagnostics topic
+- [x] Phase 9 — `htop`-style live terminal UI: verified with a real
+      captured terminal screen showing task states updating live under
+      the real Phase 7d priority-load scenario
 
 ## Troubleshooting
 
