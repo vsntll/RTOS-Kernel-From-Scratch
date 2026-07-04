@@ -104,6 +104,16 @@ static struct sockaddr_in g_addr;
 static xrce_object_id_t g_high_reader;
 static xrce_object_id_t g_low_reader;
 
+/* Phase 9 tie-in: publishes the SAME /rtos/diagnostics
+ * (diagnostic_msgs/msg/DiagnosticArray, Phase 8) this demo's own poller/
+ * high/low tasks, so host/rtos_top.py can watch this exact priority-load
+ * scenario live -- not a separate, idle demo standing in for it. */
+static xrce_session_t g_s;
+static xrce_object_id_t g_diag_writer;
+static task_t *g_poller_task_handle;
+static task_t *g_high_task_handle;
+static task_t *g_low_task_handle;
+
 static bool send_and_wait_ok(const char *step_name, const uint8_t *msg, size_t len,
                               bool (*parse_reply)(const uint8_t *, size_t)) {
     if (sendto(g_fd, msg, len, 0, (struct sockaddr *)&g_addr, sizeof(g_addr)) != (ssize_t)len) {
@@ -156,17 +166,79 @@ static void poll_once(void) {
     }
 }
 
-/* scheduler_run() only returns once every task has reached
- * TASK_TERMINATED (scheduler.c's any_task_active()) -- an unconditionally
- * infinite poller would keep it running forever even after both consumers
- * finish their MESSAGES_PER_TOPIC quota, so it checks this flag instead. */
-static volatile int g_high_done;
-static volatile int g_low_done;
+static const char *task_state_name(task_state_t s) {
+    switch (s) {
+        case TASK_READY:
+            return "READY";
+        case TASK_RUNNING:
+            return "RUNNING";
+        case TASK_BLOCKED:
+            return "BLOCKED";
+        case TASK_TERMINATED:
+            return "TERMINATED";
+        default:
+            return "UNKNOWN";
+    }
+}
 
+static void add_task_status(diagnostic_msgs_DiagnosticArray *arr, const task_t *t) {
+    diagnostic_msgs_DiagnosticStatus *st = &arr->status[arr->status_count++];
+    memset(st, 0, sizeof(*st));
+    st->level = DIAGNOSTIC_STATUS_OK;
+    snprintf(st->name, sizeof(st->name), "task/%s", t->name);
+    snprintf(st->message, sizeof(st->message), "%s", task_state_name(t->state));
+    snprintf(st->hardware_id, sizeof(st->hardware_id), "rtos");
+    snprintf(st->values[0].key, sizeof(st->values[0].key), "priority");
+    snprintf(st->values[0].value, sizeof(st->values[0].value), "%d", t->priority);
+    snprintf(st->values[1].key, sizeof(st->values[1].key), "stack_high_water_mark_bytes");
+    snprintf(st->values[1].value, sizeof(st->values[1].value), "%zu", task_stack_high_water_mark(t));
+    st->values_count = 2;
+}
+
+/* Phase 9 tie-in (see the global block above): publishes the live state of
+ * THIS demo's own poller/high/low tasks -- the real Phase 7d
+ * priority-load scenario -- as /rtos/diagnostics, so host/rtos_top.py has
+ * something real and dynamic to render while this test runs. */
+static void publish_diagnostics(void) {
+    diagnostic_msgs_DiagnosticArray arr = {0};
+    add_task_status(&arr, g_poller_task_handle);
+    add_task_status(&arr, g_high_task_handle);
+    add_task_status(&arr, g_low_task_handle);
+
+    diagnostic_msgs_DiagnosticStatus *sched = &arr.status[arr.status_count++];
+    memset(sched, 0, sizeof(*sched));
+    sched->level = DIAGNOSTIC_STATUS_OK;
+    snprintf(sched->name, sizeof(sched->name), "scheduler");
+    snprintf(sched->message, sizeof(sched->message), "running");
+    snprintf(sched->hardware_id, sizeof(sched->hardware_id), "rtos");
+    snprintf(sched->values[0].key, sizeof(sched->values[0].key), "context_switch_count");
+    snprintf(sched->values[0].value, sizeof(sched->values[0].value), "%llu",
+             (unsigned long long)scheduler_switch_count());
+    sched->values_count = 1;
+
+    uint8_t sample[1024];
+    size_t sample_len;
+    if (!diagnostic_msgs_DiagnosticArray_encode(&arr, sample, sizeof(sample), &sample_len)) {
+        return;
+    }
+    uint8_t buf[1024];
+    size_t len = xrce_session_build_write_data(&g_s, BEST_EFFORT_STREAM_0, g_diag_writer, sample + 4,
+                                                sample_len - 4, buf, sizeof(buf));
+    sendto(g_fd, buf, len, 0, (struct sockaddr *)&g_addr, sizeof(g_addr));
+}
+
+/* Runs forever, like high_task/low_task now do -- see the comment above
+ * high_task for why this demo runs continuously instead of exiting after
+ * one round. */
 static void poller_task(void *arg) {
     (void)arg;
-    while (!g_high_done || !g_low_done) {
+    uint64_t last_diag_us = 0;
+    for (;;) {
         poll_once();
+        if (now_us() - last_diag_us > 200000) { /* 200ms -- frequent enough for a live TUI to feel live */
+            publish_diagnostics();
+            last_diag_us = now_us();
+        }
         task_sleep(1);
     }
 }
@@ -182,45 +254,55 @@ static void simulate_slow_work(void) {
     }
 }
 
+/* Runs rounds of MESSAGES_PER_TOPIC forever rather than exiting after one
+ * -- a fixed one-shot run (the original Phase 7d benchmark form) races a
+ * live TUI's own ROS2 discovery time (host/rtos_top.py, Phase 9): this
+ * demo can finish in well under a second on an unloaded loopback link,
+ * before a fresh `rclpy` subscriber has even finished matching. Each
+ * round's own mean/max is unchanged from the original one-shot version
+ * (still computed the same way, over the same MESSAGES_PER_TOPIC), just
+ * printed every round instead of once. */
 static void high_task(void *arg) {
     (void)arg;
-    uint64_t total_latency_us = 0;
-    uint64_t max_latency_us = 0;
-    for (int i = 0; i < MESSAGES_PER_TOPIC; i++) {
-        dispatch_item_t *item = queue_receive(&g_high_queue);
-        uint64_t latency_us = now_us() - item->enqueued_us;
-        total_latency_us += latency_us;
-        if (latency_us > max_latency_us) {
-            max_latency_us = latency_us;
+    for (;;) {
+        uint64_t total_latency_us = 0;
+        uint64_t max_latency_us = 0;
+        for (int i = 0; i < MESSAGES_PER_TOPIC; i++) {
+            dispatch_item_t *item = queue_receive(&g_high_queue);
+            uint64_t latency_us = now_us() - item->enqueued_us;
+            total_latency_us += latency_us;
+            if (latency_us > max_latency_us) {
+                max_latency_us = latency_us;
+            }
+            printf("[high] value=%d dispatch_latency=%lluus\n", item->value,
+                   (unsigned long long)latency_us);
         }
-        printf("[high] value=%d dispatch_latency=%lluus\n", item->value,
-               (unsigned long long)latency_us);
+        printf("[high] round done: mean=%lluus max=%lluus\n",
+               (unsigned long long)(total_latency_us / MESSAGES_PER_TOPIC),
+               (unsigned long long)max_latency_us);
     }
-    printf("[high] done: mean=%lluus max=%lluus\n",
-           (unsigned long long)(total_latency_us / MESSAGES_PER_TOPIC),
-           (unsigned long long)max_latency_us);
-    g_high_done = 1;
 }
 
 static void low_task(void *arg) {
     (void)arg;
-    uint64_t total_latency_us = 0;
-    uint64_t max_latency_us = 0;
-    for (int i = 0; i < MESSAGES_PER_TOPIC; i++) {
-        dispatch_item_t *item = queue_receive(&g_low_queue);
-        uint64_t latency_us = now_us() - item->enqueued_us;
-        total_latency_us += latency_us;
-        if (latency_us > max_latency_us) {
-            max_latency_us = latency_us;
+    for (;;) {
+        uint64_t total_latency_us = 0;
+        uint64_t max_latency_us = 0;
+        for (int i = 0; i < MESSAGES_PER_TOPIC; i++) {
+            dispatch_item_t *item = queue_receive(&g_low_queue);
+            uint64_t latency_us = now_us() - item->enqueued_us;
+            total_latency_us += latency_us;
+            if (latency_us > max_latency_us) {
+                max_latency_us = latency_us;
+            }
+            printf("[low]  value=%d dispatch_latency=%lluus (about to do slow work)\n", item->value,
+                   (unsigned long long)latency_us);
+            simulate_slow_work();
         }
-        printf("[low]  value=%d dispatch_latency=%lluus (about to do slow work)\n", item->value,
-               (unsigned long long)latency_us);
-        simulate_slow_work();
+        printf("[low]  round done: mean=%lluus max=%lluus\n",
+               (unsigned long long)(total_latency_us / MESSAGES_PER_TOPIC),
+               (unsigned long long)max_latency_us);
     }
-    printf("[low]  done: mean=%lluus max=%lluus\n",
-           (unsigned long long)(total_latency_us / MESSAGES_PER_TOPIC),
-           (unsigned long long)max_latency_us);
-    g_low_done = 1;
 }
 
 int main(int argc, char **argv) {
@@ -239,20 +321,22 @@ int main(int argc, char **argv) {
     setsockopt(g_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     uint8_t key[4] = {0x7D, 0x7D, 0x7D, 0x7D};
-    xrce_session_t s;
-    xrce_session_init(&s, 0x01, key, 512);
+    /* Global, not a local `s` -- publish_diagnostics() (called from
+     * poller_task) needs the same session state (out_seq_num etc) main()
+     * accumulates through setup, not a stale copy. */
+    xrce_session_init(&g_s, 0x01, key, 512);
 
     uint8_t buf[512];
     size_t len;
 
-    len = xrce_session_build_create_client(&s, buf, sizeof(buf));
+    len = xrce_session_build_create_client(&g_s, buf, sizeof(buf));
     if (!send_and_wait_ok("CREATE_CLIENT", buf, len, xrce_session_parse_create_client_reply)) {
         return 1;
     }
 
     xrce_object_id_t participant_id = xrce_object_id(0x001, XRCE_OBJK_PARTICIPANT);
     len = xrce_session_build_create_participant(
-        &s, BEST_EFFORT_STREAM_0, participant_id, 0,
+        &g_s, BEST_EFFORT_STREAM_0, participant_id, 0,
         "<dds><participant><rtps><name>priority_demo</name></rtps></participant></dds>", buf,
         sizeof(buf));
     if (!send_and_wait_ok("CREATE participant", buf, len, xrce_session_parse_create_reply)) {
@@ -260,7 +344,7 @@ int main(int argc, char **argv) {
     }
 
     xrce_object_id_t subscriber_id = xrce_object_id(0x001, XRCE_OBJK_SUBSCRIBER);
-    len = xrce_session_build_create_xml(&s, BEST_EFFORT_STREAM_0, subscriber_id, participant_id, "", buf,
+    len = xrce_session_build_create_xml(&g_s, BEST_EFFORT_STREAM_0, subscriber_id, participant_id, "", buf,
                                          sizeof(buf));
     if (!send_and_wait_ok("CREATE subscriber", buf, len, xrce_session_parse_create_reply)) {
         return 1;
@@ -278,7 +362,7 @@ int main(int argc, char **argv) {
                  "<dds><topic><name>rt/%s</name>"
                  "<dataType>std_msgs::msg::dds_::Int32_</dataType></topic></dds>",
                  topic_names[i]);
-        len = xrce_session_build_create_xml(&s, BEST_EFFORT_STREAM_0, topic_ids[i], participant_id,
+        len = xrce_session_build_create_xml(&g_s, BEST_EFFORT_STREAM_0, topic_ids[i], participant_id,
                                              topic_xml, buf, sizeof(buf));
         char step[32];
         snprintf(step, sizeof(step), "CREATE topic %d", i);
@@ -291,23 +375,52 @@ int main(int argc, char **argv) {
                  "<dds><data_reader><topic><kind>NO_KEY</kind><name>rt/%s</name>"
                  "<dataType>std_msgs::msg::dds_::Int32_</dataType></topic></data_reader></dds>",
                  topic_names[i]);
-        len = xrce_session_build_create_xml(&s, BEST_EFFORT_STREAM_0, reader_ids[i], subscriber_id, dr_xml,
+        len = xrce_session_build_create_xml(&g_s, BEST_EFFORT_STREAM_0, reader_ids[i], subscriber_id, dr_xml,
                                              buf, sizeof(buf));
         snprintf(step, sizeof(step), "CREATE datareader %d", i);
         if (!send_and_wait_ok(step, buf, len, xrce_session_parse_create_reply)) {
             return 1;
         }
 
-        len = xrce_session_build_read_data(&s, BEST_EFFORT_STREAM_0, reader_ids[i], BEST_EFFORT_STREAM_0,
+        len = xrce_session_build_read_data(&g_s, BEST_EFFORT_STREAM_0, reader_ids[i], BEST_EFFORT_STREAM_0,
                                             buf, sizeof(buf));
         sendto(g_fd, buf, len, 0, (struct sockaddr *)&g_addr, sizeof(g_addr));
     }
     g_high_reader = reader_ids[0];
     g_low_reader = reader_ids[1];
 
+    /* /rtos/diagnostics -- same topic name/type as Phase 8's
+     * live_diagnostics_demo.c, exposing THIS demo's own tasks instead. */
+    xrce_object_id_t diag_publisher_id = xrce_object_id(0x002, XRCE_OBJK_PUBLISHER);
+    len = xrce_session_build_create_xml(&g_s, BEST_EFFORT_STREAM_0, diag_publisher_id, participant_id, "",
+                                         buf, sizeof(buf));
+    if (!send_and_wait_ok("CREATE diag publisher", buf, len, xrce_session_parse_create_reply)) {
+        return 1;
+    }
+    xrce_object_id_t diag_topic_id = xrce_object_id(0x003, XRCE_OBJK_TOPIC);
+    len = xrce_session_build_create_xml(&g_s, BEST_EFFORT_STREAM_0, diag_topic_id, participant_id,
+                                         "<dds><topic><name>rt/rtos/diagnostics</name>"
+                                         "<dataType>diagnostic_msgs::msg::dds_::DiagnosticArray_</dataType>"
+                                         "</topic></dds>",
+                                         buf, sizeof(buf));
+    if (!send_and_wait_ok("CREATE diag topic", buf, len, xrce_session_parse_create_reply)) {
+        return 1;
+    }
+    g_diag_writer = xrce_object_id(0x002, XRCE_OBJK_DATAWRITER);
+    len = xrce_session_build_create_xml(
+        &g_s, BEST_EFFORT_STREAM_0, g_diag_writer, diag_publisher_id,
+        "<dds><data_writer><topic><kind>NO_KEY</kind><name>rt/rtos/diagnostics</name>"
+        "<dataType>diagnostic_msgs::msg::dds_::DiagnosticArray_</dataType>"
+        "</topic></data_writer></dds>",
+        buf, sizeof(buf));
+    if (!send_and_wait_ok("CREATE diag datawriter", buf, len, xrce_session_parse_create_reply)) {
+        return 1;
+    }
+
     printf("\nSubscribed to rt/priority_high and rt/priority_low. Run, elsewhere:\n"
            "  ros2 topic pub -r 20 /priority_high std_msgs/msg/Int32 \"{data: 1}\"\n"
            "  ros2 topic pub -r 20 /priority_low std_msgs/msg/Int32 \"{data: 1}\"\n"
+           "  python3 host/rtos_top.py   # watch it live\n"
            "Waiting for %d messages on each topic...\n\n",
            MESSAGES_PER_TOPIC);
 
@@ -317,9 +430,9 @@ int main(int argc, char **argv) {
     /* Priorities: poller > high consumer > low consumer. The poller has
      * to run often enough to keep draining the socket regardless of which
      * consumer is busy; the high/low split is the thing under test. */
-    task_spawn("poller", poller_task, NULL, 100);
-    task_spawn("high", high_task, NULL, 50);
-    task_spawn("low", low_task, NULL, 10);
+    g_poller_task_handle = task_spawn("poller", poller_task, NULL, 100);
+    g_high_task_handle = task_spawn("high", high_task, NULL, 50);
+    g_low_task_handle = task_spawn("low", low_task, NULL, 10);
 
     scheduler_enable_preemption(TICK_MS, TICKS_PER_SLICE);
     scheduler_run();
