@@ -157,7 +157,7 @@ guard: `task_canary_ok()` explains why one doesn't work at that end of a
 downward-growing stack (`makecontext()` itself writes there before the
 task ever runs once).
 
-## Running the Cortex-M port (Phase 8)
+## Running the Cortex-M port (rtos/'s Phase 8 — a separate numbering track from the xrce/ROS2 layer's own Phase 8, diagnostics, further down)
 
 Separate toolchain, separate directory (`rtos/arm/`), not built by the
 top-level Makefile:
@@ -285,6 +285,40 @@ protocol implementation.
 Not yet done (at Phase 5): services (request/reply), multi-node. Services
 and actions land in Phase 7b below; multi-node is still not done.
 
+**Phase 6 — latency, throughput, and fault handling, measured rather than
+estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
+out on `rt/pong`; `host/bench_latency.c` times the real round trip through
+the actual firmware (not something computed from QEMU's own uncalibrated
+sense of time — see `rtos/arm/main.c`):
+
+```bash
+gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
+/tmp/bench 127.0.0.1 8888 20        # sequential round trips
+/tmp/bench 127.0.0.1 8888 burst 30  # back-to-back burst, measures loss
+```
+
+- **Latency** (paced one round trip at a time): `min=4.33ms  p50=6.50ms
+  mean=6.69ms  p95=12.46ms  max=12.46ms` — single-digit milliseconds
+  through two independent agent processes into real DDS and back.
+- **Throughput/loss under a true burst**: 40% loss at a 5-message burst,
+  80% at 30 — a real, expected limit of this implementation (UART RX is
+  polled, not interrupt-driven, with no FIFO absorbing a burst faster than
+  the poll loop returns to it), not a bug. Fine for a steady trickle,
+  not bursty traffic — stated plainly rather than glossed over.
+- **Fault handling, tested directly**: killed the serial agent mid-session
+  with the firmware left running, then started a fresh agent — all
+  entities reappeared automatically via the same periodic re-announcement
+  built for the boot-timing race, with zero firmware restart or code
+  change needed, confirmed by running the latency benchmark immediately
+  after and getting real round trips back.
+
+**Known limitations vs. real micro-ROS**, in `xrce/docs/design.md`'s Phase
+6 section: no reliable streams, no services, no real type introspection
+(bare XML name strings, not generated typesupport), no multi-node, polled
+RX, no on-device reply correlation, uncalibrated QEMU clock. Every one of
+these is a real, specific gap — not a vague disclaimer. Every one of these
+gaps got closed in Phase 7 below, except multi-node.
+
 **Phase 7a — DELETE, verified live: an entity really stops existing, not
 just that the agent replies OK.** `xrce_session_build_delete()`
 (`session.h/c`) adds the last entity-lifecycle operation on top of
@@ -408,39 +442,6 @@ flipping between `READY` and `BLOCKED` frame to frame as the low-priority
 task falls in and out of contention, a moving picture of the exact
 scheduling behavior Phase 7d measured numerically. Full account, including
 the discovery-race bug, in `xrce/docs/design.md`'s Phase 9 section.
-
-**Phase 6 — latency, throughput, and fault handling, measured rather than
-estimated.** `ros2_demo.c` echoes every received `rt/setpoint` value back
-out on `rt/pong`; `host/bench_latency.c` times the real round trip through
-the actual firmware (not something computed from QEMU's own uncalibrated
-sense of time — see `rtos/arm/main.c`):
-
-```bash
-gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
-/tmp/bench 127.0.0.1 8888 20        # sequential round trips
-/tmp/bench 127.0.0.1 8888 burst 30  # back-to-back burst, measures loss
-```
-
-- **Latency** (paced one round trip at a time): `min=4.33ms  p50=6.50ms
-  mean=6.69ms  p95=12.46ms  max=12.46ms` — single-digit milliseconds
-  through two independent agent processes into real DDS and back.
-- **Throughput/loss under a true burst**: 40% loss at a 5-message burst,
-  80% at 30 — a real, expected limit of this implementation (UART RX is
-  polled, not interrupt-driven, with no FIFO absorbing a burst faster than
-  the poll loop returns to it), not a bug. Fine for a steady trickle,
-  not bursty traffic — stated plainly rather than glossed over.
-- **Fault handling, tested directly**: killed the serial agent mid-session
-  with the firmware left running, then started a fresh agent — all
-  entities reappeared automatically via the same periodic re-announcement
-  built for the boot-timing race, with zero firmware restart or code
-  change needed, confirmed by running the latency benchmark immediately
-  after and getting real round trips back.
-
-**Known limitations vs. real micro-ROS**, in `xrce/docs/design.md`'s Phase
-6 section: no reliable streams, no services, no real type introspection
-(bare XML name strings, not generated typesupport), no multi-node, polled
-RX, no on-device reply correlation, uncalibrated QEMU clock. Every one of
-these is a real, specific gap — not a vague disclaimer.
 
 ## Project structure
 
