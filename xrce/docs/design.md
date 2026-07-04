@@ -898,8 +898,65 @@ Status: implemented, unit-tested (`task_stack_high_water_mark()`/
 round-trip in `xrce/tests/test_msgs.c`), and verified live against a real,
 unmodified agent and `ros2` CLI, both the topic and the service.
 
+## Phase 9 — Live terminal UI
+
+`host/rtos_top.py`: an `htop`-style live view of `/rtos/diagnostics`
+(Phase 8). Python + the standard-library `curses` module rather than C:
+this WSL image has the ncurses runtime libraries but not
+`libncurses-dev`, and non-interactive `sudo` isn't available in this
+environment to install it (`sudo -n apt-get install` fails with "a
+password is required") -- confirmed rather than assumed, before deciding
+to route around it. Python's `curses` module is a real binding to the
+same ncurses library the phase brief names, not a from-scratch
+reimplementation, and needs no separate package. Uses `rclpy` directly
+rather than this project's own hand-rolled `xrce/` client -- Phase 8
+already chose "piggyback on ROS2" for `/rtos/diagnostics`, so it's a real,
+standard topic at this point, and consuming a real ROS2 topic with the
+real ROS2 client library is the idiomatic choice, not a compromise; this
+tool has no involvement in the RTOS's own embedded protocol stack the way
+the `host/*.c` demos do.
+
+**A real bug in the demo, not the TUI, found while trying to verify this
+combination live**: `host/live_priority_demo.c` (Phase 7d) was a one-shot
+benchmark -- 15 messages per topic, then exit -- tuned for printing a
+clean mean/max summary. On an unloaded loopback link that finishes in
+well under a second, which routinely raced a fresh `rclpy` subscriber's
+own DDS discovery time: the demo would already be done and gone before
+`rtos_top.py` had even finished matching with its publisher, so the
+screen just showed "waiting for /rtos/diagnostics..." forever. Confirmed
+directly (not guessed) by checking `ps` mid-run and finding the demo
+process already exited while the TUI was still discovering. Fixed by
+wrapping `high_task`/`low_task`/`poller_task`'s bodies in an outer
+`for(;;)`, so the demo now runs continuous rounds instead of one --
+printing the same per-round mean/max as before (values already recorded
+in Phase 7d's writeup above are unaffected, just now repeating), and
+giving a live TUI actual continuous data to watch. `live_priority_demo.c`
+also gained its own `/rtos/diagnostics` publisher (same topic/type as
+Phase 8's `live_diagnostics_demo.c`, reporting this demo's own
+poller/high/low tasks instead) specifically so the tool can watch the
+*real* Phase 7d priority-load scenario live, not a separate idle stand-in
+for it.
+
+**Verified live end to end**, capturing the real terminal screen via
+`script` (curses needs a real pty, which this session's tool harness
+doesn't provide directly) while a real agent, `live_priority_demo.c`, and
+two real `ros2 topic pub -r 20` publishers all ran concurrently: the
+rendered table shows real, correct, live-updating values --
+`poller RUNNING 100 23752` / `high BLOCKED 50 2056` / `low READY 10 2056`
+(name/state/priority/stack-high-water-mark columns) and
+`context_switch_count` climbing across frames, with the `low` task's
+own state genuinely flipping between `READY` and `BLOCKED` frame to frame
+as it falls in and out of contention -- an actual moving picture of the
+scheduling behavior Phase 7d measured numerically, not just a static
+snapshot.
+
+Status: implemented and verified live against a real, unmodified agent,
+`live_priority_demo.c` under real `ros2 topic pub -r` load, and a real
+captured terminal screen showing live updates.
+
 ## Later phases
 
-Not started: live TUI (Phase 9). Tracked at a high
-level in the top-level project plan; this file gets a new dated section
-per phase as it actually lands, same convention as `rtos/docs/design.md`.
+Every planned phase (1-9) has now landed. Future work, if any, gets
+tracked at the top-level project plan level; this file's convention (a
+new dated section per phase) stops here since there are no more phases
+queued.
