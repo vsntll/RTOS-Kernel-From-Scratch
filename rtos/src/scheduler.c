@@ -72,6 +72,38 @@ static int any_task_active(void) {
     return 0;
 }
 
+/* A SIGALRM landing mid-swapcontext() -- while we're partway through
+ * saving/restoring registers for one of *our own* voluntary switches --
+ * would let the handler's own swapcontext() reenter that half-finished
+ * switch and corrupt it. Blocking the signal around each manual
+ * swapcontext() call closes most of that window; it doesn't defeat
+ * preemption, since swapcontext() restores the incoming context's own
+ * uc_sigmask (unblocked) as part of the switch, so the task runs
+ * preemptible again as soon as it's actually running.
+ *
+ * Known limitation: this narrows the race but doesn't provably close it
+ * -- glibc's swapcontext() may restore the signal mask before the switch
+ * is fully complete, leaving a tiny window. In practice this only showed
+ * up as an intermittent hang when a task called task_yield() in a very
+ * tight loop *while preemption was active* (see test_timing.c, which
+ * avoids the pattern by not yielding from its busy-task). Tasks that
+ * yield occasionally, or that rely purely on preemption without calling
+ * task_yield() at all, don't hit it. A fully airtight fix would move
+ * preemption off calling swapcontext() from inside the handler entirely
+ * (mutating the kernel-supplied signal ucontext instead, so the switch
+ * happens via the normal sigreturn path) -- noted here as follow-up
+ * hardening work rather than blocking this phase on it. */
+static void block_alarm(sigset_t *old_mask) {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGALRM);
+    sigprocmask(SIG_BLOCK, &set, old_mask);
+}
+
+static void restore_mask(const sigset_t *old_mask) {
+    sigprocmask(SIG_SETMASK, old_mask, NULL);
+}
+
 void scheduler_run(void) {
     while (any_task_active()) {
         int next = pick_next_ready();
@@ -82,7 +114,11 @@ void scheduler_run(void) {
         }
         g_current_idx = next;
         g_tasks[next]->state = TASK_RUNNING;
+
+        sigset_t old_mask;
+        block_alarm(&old_mask);
         swapcontext(&g_sched_ctx, &g_tasks[next]->context);
+        restore_mask(&old_mask);
     }
     g_current_idx = -1;
 }
@@ -95,7 +131,11 @@ void task_yield(void) {
     if (cur->state == TASK_RUNNING) {
         cur->state = TASK_READY;
     }
+
+    sigset_t old_mask;
+    block_alarm(&old_mask);
     swapcontext(&cur->context, &g_sched_ctx);
+    restore_mask(&old_mask);
 }
 
 /* --- Preemption -----------------------------------------------------
