@@ -53,10 +53,12 @@ task_t *task_create(const char *name, task_entry_t entry, void *arg,
         free(task);
         return NULL;
     }
+    /* Bottom guard only -- see task_canary_ok() for why a "top" guard at
+     * this end of the buffer doesn't work (makecontext(), called below,
+     * writes into it immediately as part of setting up the initial
+     * frame, before the task ever runs once). */
     if (task->stack_size >= 2 * TASK_CANARY_SIZE) {
         memset(task->stack, TASK_CANARY_BYTE, TASK_CANARY_SIZE);
-        memset(task->stack + task->stack_size - TASK_CANARY_SIZE,
-               TASK_CANARY_BYTE, TASK_CANARY_SIZE);
     }
 
     task->context.uc_stack.ss_sp = task->stack;
@@ -89,14 +91,15 @@ int task_canary_ok(const task_t *task) {
     if (task->stack_size < 2 * TASK_CANARY_SIZE) {
         return 1; /* stack too small to have planted canaries at all */
     }
+    /* Only the bottom (low-address) guard is checked. x86_64 stacks grow
+     * downward from uc_stack.ss_sp+ss_size, so the bottom is where deep
+     * recursion/overflow actually lands -- confirmed by dumping a freshly
+     * created, never-run task: makecontext() itself already writes into
+     * the last several bytes of the buffer while setting up the initial
+     * frame, so a "top" guard there would misfire before the task even
+     * runs once, not after real corruption. */
     for (size_t i = 0; i < TASK_CANARY_SIZE; i++) {
         if (task->stack[i] != TASK_CANARY_BYTE) {
-            return 0;
-        }
-    }
-    const unsigned char *top = task->stack + task->stack_size - TASK_CANARY_SIZE;
-    for (size_t i = 0; i < TASK_CANARY_SIZE; i++) {
-        if (top[i] != TASK_CANARY_BYTE) {
             return 0;
         }
     }
