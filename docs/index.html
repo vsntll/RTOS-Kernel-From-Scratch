@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>RTOS Kernel From Scratch</title>
-<meta name="description" content="A preemptive, priority-based RTOS kernel written in C from first principles — scheduler, context switch, priority-inheriting mutex, a real Cortex-M4 port, and a Micro XRCE-DDS client layer that interoperates with a real, unmodified ROS2 agent." />
+<meta name="description" content="A preemptive, priority-based RTOS kernel written in C from first principles — scheduler, context switch, priority-inheriting mutex, a real Cortex-M4 port, and a Micro XRCE-DDS client layer that interoperates with a real, unmodified ROS2 agent, including services, actions, enforced QoS, a priority-aware executor, live diagnostics, and a live TUI." />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2312161f'/%3E%3Crect x='6' y='14' width='6' height='6' fill='%23dc9a3f'/%3E%3Crect x='14' y='8' width='6' height='6' fill='%235fada3'/%3E%3Crect x='22' y='18' width='4' height='4' fill='%23dc9a3f'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -90,7 +90,7 @@
 
   * { box-sizing: border-box; }
 
-  html { -webkit-text-size-adjust: 100%; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
 
   body {
     margin: 0;
@@ -125,7 +125,7 @@
     padding: 0 24px;
   }
 
-  /* ---------- top bar ---------- */
+  /* ---------- top bar + tabs ---------- */
   .topbar {
     position: sticky;
     top: 0;
@@ -137,11 +137,12 @@
   .topbar-inner {
     max-width: 920px;
     margin: 0 auto;
-    padding: 14px 24px;
+    padding: 14px 24px 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
+    flex-wrap: wrap;
   }
   .brand {
     display: flex;
@@ -152,6 +153,7 @@
     font-size: 0.92rem;
     color: var(--ink);
     text-decoration: none;
+    padding-bottom: 14px;
   }
   .brand-mark {
     width: 14px;
@@ -159,15 +161,6 @@
     background: var(--accent);
     flex: none;
   }
-  .topbar nav {
-    display: flex;
-    align-items: center;
-    gap: 22px;
-    font-family: "IBM Plex Mono", monospace;
-    font-size: 0.82rem;
-  }
-  .topbar nav a { color: var(--ink-dim); text-decoration: none; }
-  .topbar nav a:hover { color: var(--accent); }
   .theme-toggle {
     font-family: "IBM Plex Mono", monospace;
     font-size: 0.72rem;
@@ -178,11 +171,52 @@
     padding: 5px 10px;
     cursor: pointer;
     border-radius: 2px;
+    margin-bottom: 14px;
   }
   .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
 
+  /* real tabs: each is a hyperlink (href="#tabname"), only one panel visible at a time */
+  .tabbar {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 0 24px;
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tabbar::-webkit-scrollbar { display: none; }
+  .tab {
+    flex: none;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.8rem;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+    color: var(--ink-dim);
+    padding: 10px 14px 9px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 3px 3px 0 0;
+    white-space: nowrap;
+  }
+  .tab:hover { color: var(--ink); background: var(--surface-2); }
+  .tab.active {
+    color: var(--accent);
+    background: var(--surface);
+    border-color: var(--line);
+    font-weight: 600;
+  }
+  .tab .tab-n { color: var(--ink-faint); margin-right: 6px; }
+  .tab.active .tab-n { color: var(--accent-2); }
+
+  /* ---------- tab panels ---------- */
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; animation: panelIn 0.18s ease; }
+  @keyframes panelIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .tab-panel.active { animation: none; } }
+
   /* ---------- hero ---------- */
-  .hero { padding: 64px 0 40px; }
+  .hero { padding: 48px 0 40px; }
   .hero .label { color: var(--accent-2); }
   h1 {
     font-family: "IBM Plex Mono", monospace;
@@ -221,6 +255,8 @@
     align-items: center;
     gap: 8px;
     border-radius: 2px;
+    cursor: pointer;
+    background: none;
   }
   .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -311,7 +347,7 @@
   .legend i.ready { border: 1px dashed var(--line-strong); }
   .legend i.blocked { background: repeating-linear-gradient(135deg, var(--line-strong) 0, var(--line-strong) 1px, transparent 1px, transparent 4px); opacity: 0.6; }
 
-  /* ---------- overview (pipeline + two-part cards) ---------- */
+  /* ---------- overview (pipeline + cards) ---------- */
   .pipeline { margin: 32px 0 8px; }
   .pipeline-track { display: flex; align-items: center; }
   .pnode {
@@ -321,11 +357,11 @@
     box-shadow: var(--shadow);
     padding: 14px 16px;
     text-align: center;
-    min-width: 128px;
+    min-width: 112px;
   }
-  .pn-label { display: block; font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; font-weight: 600; color: var(--ink); letter-spacing: 0.03em; }
-  .pn-sub { display: block; font-family: "IBM Plex Mono", monospace; font-size: 0.64rem; color: var(--ink-faint); margin-top: 4px; }
-  .pline { flex: 1; height: 2px; background: var(--line); position: relative; margin: 0 4px; min-width: 28px; }
+  .pn-label { display: block; font-family: "IBM Plex Mono", monospace; font-size: 0.76rem; font-weight: 600; color: var(--ink); letter-spacing: 0.02em; }
+  .pn-sub { display: block; font-family: "IBM Plex Mono", monospace; font-size: 0.62rem; color: var(--ink-faint); margin-top: 4px; }
+  .pline { flex: 1; height: 2px; background: var(--line); position: relative; margin: 0 4px; min-width: 20px; }
   .pdot { position: absolute; top: -3px; left: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-2); animation: flow 2.4s linear infinite; }
   @keyframes flow {
     0% { left: 0; opacity: 0; }
@@ -362,17 +398,33 @@
   .oc-body h3 { margin: 4px 0 8px; }
   .oc-body p { margin: 0 0 12px; font-size: 0.9rem; }
   .oc-stats { font-family: "IBM Plex Mono", monospace; font-size: 0.7rem; letter-spacing: 0.03em; color: var(--ink-faint); margin-bottom: 10px; }
-  .oc-link { font-family: "IBM Plex Mono", monospace; font-size: 0.82rem; text-decoration: none; color: var(--accent); }
+  .oc-link { font-family: "IBM Plex Mono", monospace; font-size: 0.82rem; text-decoration: none; color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; }
   .oc-link:hover { text-decoration: underline; }
+
+  /* small tile grid used on the overview tab to jump straight to phase 7's sub-parts */
+  .jump-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 20px; }
+  .jump-tile {
+    display: block;
+    text-decoration: none;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    padding: 16px 18px;
+    color: var(--ink);
+  }
+  .jump-tile:hover { border-color: var(--accent); }
+  .jump-tile .jt-n { font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; color: var(--accent-2); letter-spacing: 0.06em; }
+  .jump-tile .jt-t { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 0.92rem; margin: 4px 0 6px; }
+  .jump-tile .jt-d { font-size: 0.82rem; color: var(--ink-dim); }
 
   @media (prefers-reduced-motion: reduce) {
     .pdot, .oc-icon .bar, .oc-icon.ros .dot { animation: none; }
   }
 
   /* ---------- sections ---------- */
-  section { padding: 52px 0; border-top: 1px solid var(--line); }
+  section { padding: 44px 0; border-top: 1px solid var(--line); }
   section.no-rule { border-top: none; }
-  .section-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 22px; }
+  .section-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
   .section-head .num { font-family: "IBM Plex Mono", monospace; color: var(--ink-faint); font-size: 0.85rem; }
   h2 {
     font-family: "IBM Plex Mono", monospace;
@@ -380,6 +432,17 @@
     font-weight: 600;
     margin: 0;
     text-wrap: balance;
+  }
+  .status-pill {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent-2);
+    border: 1px solid var(--accent-2);
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: auto;
   }
   h3 {
     font-family: "IBM Plex Mono", monospace;
@@ -427,7 +490,7 @@
     border-bottom: 1px solid var(--line);
   }
   .phase:last-child { border-bottom: none; }
-  .phase .n { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-weight: 600; font-size: 0.85rem; width: 26px; flex: none; }
+  .phase .n { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-weight: 600; font-size: 0.85rem; width: 30px; flex: none; }
   .phase .t { font-weight: 500; color: var(--ink); }
   .phase .d { color: var(--ink-dim); font-size: 0.88rem; margin-left: auto; text-align: right; max-width: 40ch; }
   .phase.stretch .n { color: var(--accent-2); }
@@ -458,6 +521,11 @@
     font-size: 0.94rem;
   }
 
+  .stat-row { display: flex; gap: 1px; background: var(--line); border: 1px solid var(--line); margin: 18px 0; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 130px; background: var(--surface); padding: 14px 16px; }
+  .stat .sv { font-family: "IBM Plex Mono", monospace; font-weight: 700; font-size: 1.3rem; color: var(--accent); }
+  .stat .sl { font-family: "IBM Plex Mono", monospace; font-size: 0.68rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-faint); margin-top: 4px; }
+
   code.block, pre {
     display: block;
     font-family: "IBM Plex Mono", monospace;
@@ -469,6 +537,10 @@
     border: 1px solid var(--line);
     line-height: 1.6;
   }
+
+  .subnav { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 8px; font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; }
+  .subnav a { color: var(--ink-dim); text-decoration: none; }
+  .subnav a:hover { color: var(--accent); }
 
   footer {
     border-top: 1px solid var(--line);
@@ -485,7 +557,6 @@
     .grid-2 { grid-template-columns: 1fr; }
     .phase { flex-wrap: wrap; }
     .phase .d { margin-left: 0; text-align: left; max-width: none; }
-    .topbar nav { display: none; }
     .track-name { width: 40px; font-size: 0.68rem; }
     .overview-grid { grid-template-columns: 1fr; }
     .pipeline-track { flex-direction: column; align-items: stretch; }
@@ -536,363 +607,423 @@
 <body>
 <!--
   task_spawn("reader", read_source, NULL, PRIO_CURIOUS);
-  if you're in here: everything below the fold is real, checked against
-  a real MicroXRCEAgent, logs and all. try the konami code on this page.
+  if you're in here: everything below is real, checked against a real
+  MicroXRCEAgent and a real ros2 CLI, logs and all. try the konami code.
 -->
 
 <div class="topbar">
   <div class="topbar-inner">
-    <a class="brand" href="#top" title="kernel panic (just kidding)"><span class="brand-mark"></span>rtos-kernel-from-scratch</a>
-    <nav>
-      <a href="#overview">overview</a>
-      <a href="#architecture">architecture</a>
-      <a href="#roadmap">roadmap</a>
-      <a href="#api">api</a>
-      <a href="#validation">validation</a>
-      <a href="#ros2">ros2 layer</a>
-      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme">MODE: AUTO</button>
-    </nav>
+    <a class="brand" href="#overview" title="kernel panic (just kidding)"><span class="brand-mark"></span>rtos-kernel-from-scratch</a>
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme">MODE: AUTO</button>
   </div>
+  <nav class="tabbar" id="tabbar" aria-label="Site sections">
+    <a class="tab" href="#overview" data-tab="overview"><span class="tab-n">00</span>Overview</a>
+    <a class="tab" href="#kernel" data-tab="kernel"><span class="tab-n">01</span>RTOS Kernel</a>
+    <a class="tab" href="#ros2" data-tab="ros2"><span class="tab-n">02</span>ROS2 Foundation</a>
+    <a class="tab" href="#phase7" data-tab="phase7"><span class="tab-n">03</span>Phase 7</a>
+    <a class="tab" href="#phase8" data-tab="phase8"><span class="tab-n">04</span>Diagnostics</a>
+    <a class="tab" href="#phase9" data-tab="phase9"><span class="tab-n">05</span>Live TUI</a>
+  </nav>
 </div>
 
-<div id="top" class="wrap hero">
-  <div class="label">C · POSIX HOST-NATIVE + CORTEX-M4 · NO RTOS DEPENDENCIES</div>
-  <h1>A real-time kernel,<br /><span>built from first principles.</span></h1>
-  <p class="dek">
-    Most embedded engineers <em>use</em> FreeRTOS without ever implementing a scheduler,
-    a context switch, or a priority-inheriting mutex themselves. This is that implementation —
-    task structs and stacks, cooperative and preemptive scheduling, priority inversion and the
-    fix for it, and blocking synchronization primitives — built up in eight testable phases,
-    running host-native on <code>ucontext.h</code> and, in Phase 8, on real Cortex-M4 assembly
-    under QEMU. On top of that port, a Micro XRCE-DDS client layer lets RTOS tasks publish into
-    a real ROS2 graph through a real, unmodified agent — <a href="#overview">see how it fits together</a>.
-  </p>
-  <div class="cta-row">
-    <a class="btn primary" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch">View source →</a>
-    <a class="btn" href="#overview">See both parts ↓</a>
-    <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/docs/design.md">Read the design doc</a>
-    <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/arm/README.md">Cortex-M4 port ↗</a>
-  </div>
-
-  <div class="scope" aria-hidden="true">
-    <div class="scope-head">
-      <span class="fig">FIG. 1 — SCHEDULE TRACE (ILLUSTRATIVE)</span>
-      <span class="caption">3 tasks · tick slice = 3 · round-robin + preemption</span>
+<!-- ============================== TAB: OVERVIEW ============================== -->
+<div class="tab-panel" id="tab-overview">
+  <div id="top" class="wrap hero">
+    <div class="label">C · POSIX HOST-NATIVE + CORTEX-M4 · NO RTOS DEPENDENCIES</div>
+    <h1>A real-time kernel,<br /><span>built from first principles.</span></h1>
+    <p class="dek">
+      Most embedded engineers <em>use</em> FreeRTOS without ever implementing a scheduler,
+      a context switch, or a priority-inheriting mutex themselves. This is that implementation —
+      task structs and stacks, cooperative and preemptive scheduling, priority inversion and the
+      fix for it, and blocking synchronization primitives — running host-native on
+      <code>ucontext.h</code> and on real Cortex-M4 assembly under QEMU. On top of that, a Micro
+      XRCE-DDS client layer lets RTOS tasks publish, subscribe, serve, and act into a real ROS2
+      graph through a real, unmodified agent — services, actions, enforced QoS under real packet
+      loss, a priority-aware executor, live diagnostics, and a live TUI, all verified against real
+      tooling, not simulated.
+    </p>
+    <div class="cta-row">
+      <a class="btn primary" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch">View source →</a>
+      <a class="btn" href="#kernel" data-tab-link="kernel">RTOS kernel ↓</a>
+      <a class="btn" href="#ros2" data-tab-link="ros2">ROS2 layer ↓</a>
+      <a class="btn" href="#phase7" data-tab-link="phase7">Phase 7 ↓</a>
     </div>
 
-    <div class="track-row">
-      <span class="track-name">TASK A</span>
-      <div class="track">
-        <div class="seg running" style="grid-column:1/4"></div>
-        <div class="seg ready" style="grid-column:4/7"></div>
-        <div class="seg running" style="grid-column:7/10"></div>
-        <div class="seg ready" style="grid-column:10/13"></div>
-        <div class="tickmark" style="left:50%" data-label="SIGALRM tick"></div>
+    <div class="scope" aria-hidden="true">
+      <div class="scope-head">
+        <span class="fig">FIG. 1 — SCHEDULE TRACE (ILLUSTRATIVE)</span>
+        <span class="caption">3 tasks · tick slice = 3 · round-robin + preemption</span>
       </div>
-    </div>
-    <div class="track-row">
-      <span class="track-name">TASK B</span>
-      <div class="track">
-        <div class="seg ready" style="grid-column:1/4"></div>
-        <div class="seg running" style="grid-column:4/7"></div>
-        <div class="seg ready" style="grid-column:7/10"></div>
-        <div class="seg running" style="grid-column:10/13"></div>
+
+      <div class="track-row">
+        <span class="track-name">TASK A</span>
+        <div class="track">
+          <div class="seg running" style="grid-column:1/4"></div>
+          <div class="seg ready" style="grid-column:4/7"></div>
+          <div class="seg running" style="grid-column:7/10"></div>
+          <div class="seg ready" style="grid-column:10/13"></div>
+          <div class="tickmark" style="left:50%" data-label="SIGALRM tick"></div>
+        </div>
       </div>
-    </div>
-    <div class="track-row">
-      <span class="track-name">TASK C</span>
-      <div class="track">
-        <div class="seg blocked" style="grid-column:1/6"></div>
-        <div class="seg ready" style="grid-column:6/9"></div>
-        <div class="seg running" style="grid-column:9/13"></div>
-        <div class="tickmark" style="left:41.7%" data-label="mutex_unlock → wake"></div>
+      <div class="track-row">
+        <span class="track-name">TASK B</span>
+        <div class="track">
+          <div class="seg ready" style="grid-column:1/4"></div>
+          <div class="seg running" style="grid-column:4/7"></div>
+          <div class="seg ready" style="grid-column:7/10"></div>
+          <div class="seg running" style="grid-column:10/13"></div>
+        </div>
       </div>
-    </div>
-    <div class="playhead"></div>
-    <div class="axis"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span></div>
-    <div class="legend">
-      <span class="sw"><i class="running"></i>RUNNING</span>
-      <span class="sw"><i class="ready"></i>READY</span>
-      <span class="sw"><i class="blocked"></i>BLOCKED (on mutex/queue/sleep)</span>
+      <div class="track-row">
+        <span class="track-name">TASK C</span>
+        <div class="track">
+          <div class="seg blocked" style="grid-column:1/6"></div>
+          <div class="seg ready" style="grid-column:6/9"></div>
+          <div class="seg running" style="grid-column:9/13"></div>
+          <div class="tickmark" style="left:41.7%" data-label="mutex_unlock → wake"></div>
+        </div>
+      </div>
+      <div class="playhead"></div>
+      <div class="axis"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span></div>
+      <div class="legend">
+        <span class="sw"><i class="running"></i>RUNNING</span>
+        <span class="sw"><i class="ready"></i>READY</span>
+        <span class="sw"><i class="blocked"></i>BLOCKED (on mutex/queue/sleep)</span>
+      </div>
     </div>
   </div>
+
+  <section class="no-rule">
+    <div class="wrap">
+      <div class="label" style="margin-bottom:8px;">TWO PARTS, ONE SYSTEM</div>
+      <h2 style="font-size:1.6rem;">What's actually here, at a glance</h2>
+      <p class="lede" style="margin-top:10px;">
+        A kernel that schedules tasks, and a client layer that lets those tasks talk to ROS2 —
+        built as two separate, independently-testable pieces, then wired together and pushed
+        well past "pub/sub demo" into a credible middleware implementation: services, actions,
+        QoS that actually changes transport behavior under real loss, priority-aware dispatch,
+        live diagnostics, and a live TUI. Each tab above is one part of that; this page is the map.
+      </p>
+
+      <div class="pipeline" aria-hidden="true">
+        <div class="pipeline-track">
+          <div class="pnode"><span class="pn-label">RTOS KERNEL</span><span class="pn-sub">tasks · sched · mutex</span></div>
+          <div class="pline"><span class="pdot"></span></div>
+          <div class="pnode"><span class="pn-label">XRCE CLIENT</span><span class="pn-sub">serial / UDP · CDR</span></div>
+          <div class="pline"><span class="pdot" style="animation-delay:0.8s"></span></div>
+          <div class="pnode"><span class="pn-label">ROS2 AGENT</span><span class="pn-sub">real · unmodified</span></div>
+          <div class="pline"><span class="pdot" style="animation-delay:1.6s"></span></div>
+          <div class="pnode"><span class="pn-label">ros2 CLI / rclpy</span><span class="pn-sub">topics · svcs · actions</span></div>
+        </div>
+      </div>
+
+      <div class="overview-grid">
+        <div class="overview-card">
+          <div class="oc-icon" aria-hidden="true"><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
+          <div class="oc-body">
+            <div class="label" style="color:var(--accent);">PART 1</div>
+            <h3>RTOS Kernel</h3>
+            <p>A preemptive, priority-based scheduler built from first principles in C — task structs,
+            context switching, priority inheritance, and blocking sync primitives — running host-native
+            and on real Cortex-M4 assembly.</p>
+            <div class="oc-stats">8 / 8 phases complete · host-native + Cortex-M4</div>
+            <a class="oc-link" href="#kernel" data-tab-link="kernel">Kernel details ↓</a>
+          </div>
+        </div>
+        <div class="overview-card">
+          <div class="oc-icon ros" aria-hidden="true"><span class="track"><span class="dot"></span></span></div>
+          <div class="oc-body">
+            <div class="label" style="color:var(--accent-2);">PART 2</div>
+            <h3>ROS2 client layer</h3>
+            <p>A Micro XRCE-DDS client that speaks the real wire protocol — pub/sub, then services,
+            actions, enforced QoS, priority dispatch, diagnostics, and a live TUI, each verified
+            against a real, unmodified agent and CLI.</p>
+            <div class="oc-stats">Phases 0–9 complete · pub/sub, svc/action, QoS, diagnostics, TUI</div>
+            <a class="oc-link" href="#ros2" data-tab-link="ros2">ROS2 layer details ↓</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="jump-grid">
+        <a class="jump-tile" href="#phase7" data-tab-link="phase7">
+          <div class="jt-n">PHASE 7A–7D</div>
+          <div class="jt-t">Deepen the middleware</div>
+          <div class="jt-d">DELETE lifecycle, services &amp; actions, real QoS under induced loss, priority-aware executor</div>
+        </a>
+        <a class="jump-tile" href="#phase8" data-tab-link="phase8">
+          <div class="jt-n">PHASE 8</div>
+          <div class="jt-t">Live diagnostics</div>
+          <div class="jt-d">Real task/scheduler/queue state as a standard <code>diagnostic_msgs</code> topic + service</div>
+        </a>
+        <a class="jump-tile" href="#phase9" data-tab-link="phase9">
+          <div class="jt-n">PHASE 9</div>
+          <div class="jt-t">Live terminal UI</div>
+          <div class="jt-d"><code>htop</code>-style view over the diagnostics topic, verified with a real captured screen</div>
+        </a>
+      </div>
+    </div>
+  </section>
 </div>
 
-<section class="no-rule" id="overview">
-  <div class="wrap">
-    <div class="label" style="margin-bottom:8px;">TWO PARTS, ONE SYSTEM</div>
-    <h2 style="font-size:1.6rem;">What's actually here, at a glance</h2>
-    <p class="lede" style="margin-top:10px;">
-      A kernel that schedules tasks, and a client layer that lets those tasks talk to ROS2 —
-      built as two separate, independently-testable pieces, then wired together on real
-      Cortex-M4 hardware under QEMU. The diagram below is the whole shape of it; everything
-      past this point (§1–§9) is the detail behind each box.
-    </p>
-
-    <div class="pipeline" aria-hidden="true">
-      <div class="pipeline-track">
-        <div class="pnode"><span class="pn-label">RTOS KERNEL</span><span class="pn-sub">tasks · scheduler · mutex</span></div>
-        <div class="pline"><span class="pdot"></span></div>
-        <div class="pnode"><span class="pn-label">XRCE CLIENT</span><span class="pn-sub">serial / UDP · CDR</span></div>
-        <div class="pline"><span class="pdot" style="animation-delay:1.2s"></span></div>
-        <div class="pnode"><span class="pn-label">ROS2 AGENT</span><span class="pn-sub">real · unmodified</span></div>
+<!-- ============================== TAB: RTOS KERNEL ============================== -->
+<div class="tab-panel" id="tab-kernel">
+  <section class="no-rule">
+    <div class="wrap" style="padding-top:36px;">
+      <div class="label" style="margin-bottom:8px;">PART 1</div>
+      <h2 style="font-size:1.6rem;">RTOS Kernel</h2>
+      <p class="lede" style="margin-top:10px;">Task structs and stacks, a cooperative scheduler, preemption via timer interrupt,
+      priority scheduling with the classic inversion bug (and the fix), and blocking
+      synchronization primitives — host-native first, then a real Cortex-M4 port.</p>
+      <div class="subnav">
+        <a href="#why">Why it exists</a>
+        <a href="#architecture">How it runs</a>
+        <a href="#roadmap">Build phases</a>
+        <a href="#api">Kernel API</a>
+        <a href="#tests">Test suite</a>
+        <a href="#validation">Validation</a>
+        <a href="#field-notes">Field notes</a>
+        <a href="#run">Run it</a>
       </div>
     </div>
+  </section>
 
-    <div class="overview-grid">
-      <div class="overview-card">
-        <div class="oc-icon" aria-hidden="true"><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
-        <div class="oc-body">
-          <div class="label" style="color:var(--accent);">PART 1 · §1–§8</div>
-          <h3>RTOS Kernel</h3>
-          <p>A preemptive, priority-based scheduler built from first principles in C — task structs,
-          context switching, priority inheritance, and blocking sync primitives — running host-native
-          and on real Cortex-M4 assembly.</p>
-          <div class="oc-stats">8 / 8 phases complete · host-native + Cortex-M4</div>
-          <a class="oc-link" href="#why">Kernel details ↓</a>
-        </div>
-      </div>
-      <div class="overview-card">
-        <div class="oc-icon ros" aria-hidden="true"><span class="track"><span class="dot"></span></span></div>
-        <div class="oc-body">
-          <div class="label" style="color:var(--accent-2);">PART 2 · §9</div>
-          <h3>ROS2 client layer</h3>
-          <p>A Micro XRCE-DDS client on top of the kernel that speaks the real wire protocol —
-          verified bidirectionally against an unmodified <code>MicroXRCEAgent</code>, with measured
-          latency, throughput, and fault-recovery numbers.</p>
-          <div class="oc-stats">7 / 7 phases complete · pub + sub, both transports</div>
-          <a class="oc-link" href="#ros2">ROS2 layer details ↓</a>
-        </div>
-      </div>
+  <section id="why">
+    <div class="wrap">
+      <div class="section-head"><span class="num">§1</span><h2>Why it exists</h2></div>
+      <p class="lede">
+        This project builds an RTOS kernel entirely from first principles: task structs and stacks,
+        a cooperative scheduler, preemption via timer interrupt, priority scheduling with the
+        classic inversion bug (and the priority-inheritance fix for it), and blocking synchronization
+        primitives — mutex, semaphore, message queue. Everything runs as a host-native process first:
+        no board, simulator, or cross-compiler needed. <code>docs/design.md</code> documents the
+        internal architecture in full.
+      </p>
     </div>
-  </div>
-</section>
+  </section>
 
-<section id="why">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§1</span><h2>Why it exists</h2></div>
-    <p class="lede">
-      This project builds an RTOS kernel entirely from first principles: task structs and stacks,
-      a cooperative scheduler, preemption via timer interrupt, priority scheduling with the
-      classic inversion bug (and the priority-inheritance fix for it), and blocking synchronization
-      primitives — mutex, semaphore, message queue. Everything runs as a host-native process first:
-      no board, simulator, or cross-compiler needed. <code>docs/design.md</code> documents the
-      internal architecture in full.
-    </p>
-  </div>
-</section>
-
-<section id="architecture">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§2</span><h2>How it runs</h2></div>
-    <p>
-      Context switching uses POSIX primitives (<code>ucontext.h</code>) in place of real hardware
-      registers, and a POSIX interval timer (<code>setitimer</code> + <code>SIGALRM</code>) stands
-      in for a hardware tick interrupt — the host-native equivalent of a SysTick ISR triggering
-      <code>PendSV</code> on a real Cortex-M part.
-    </p>
-    <div class="diagram">main() <span class="dim">--&gt;</span> scheduler_run() <span class="dim">--&gt;</span> [Task A] <span class="warm">&lt;--context_switch--&gt;</span> [Task B] <span class="dim">&lt;--&gt;</span> [Task C]
+  <section id="architecture">
+    <div class="wrap">
+      <div class="section-head"><span class="num">§2</span><h2>How it runs</h2></div>
+      <p>
+        Context switching uses POSIX primitives (<code>ucontext.h</code>) in place of real hardware
+        registers, and a POSIX interval timer (<code>setitimer</code> + <code>SIGALRM</code>) stands
+        in for a hardware tick interrupt — the host-native equivalent of a SysTick ISR triggering
+        <code>PendSV</code> on a real Cortex-M part.
+      </p>
+      <div class="diagram">main() <span class="dim">--&gt;</span> scheduler_run() <span class="dim">--&gt;</span> [Task A] <span class="warm">&lt;--context_switch--&gt;</span> [Task B] <span class="dim">&lt;--&gt;</span> [Task C]
                                     <span class="dim">|</span>
                               <span class="warm">SIGALRM</span> <span class="dim">(tick) forces preemption</span></div>
 
-    <h3 style="margin-top:36px;">Two build targets, one design</h3>
-    <p style="margin-bottom:0;">The context-switch code is also ported to real Cortex-M4 assembly and boots under QEMU (primary) and Renode (<code>rtos/arm/</code>) — deliberately a small proof that the design ports to real hardware, not a re-implementation of Phases 2–7 on top of it.</p>
-    <div class="grid-2">
-      <div>
-        <div class="col-head">Host-native — src/</div>
-        <ul>
-          <li>Context switch via <code>swapcontext()</code> (<code>task.c</code>)</li>
-          <li>Tick source: <code>setitimer</code> + <code>SIGALRM</code></li>
-          <li>Stack: <code>malloc()</code>'d buffer + <code>ucontext_t</code></li>
-          <li>Full kernel: priority-aware round robin, sync primitives, sleep, canaries</li>
-        </ul>
-      </div>
-      <div>
-        <div class="col-head">Cortex-M4 — arm/</div>
-        <ul>
-          <li>Context switch via <code>PendSV_Handler</code> (<code>context_switch.s</code>)</li>
-          <li>Tick source: real <code>SysTick</code></li>
-          <li>Stack: fixed array + hand-built exception frame (<code>kernel_arm.c</code>)</li>
-          <li>Round robin only — a minimal 2-task demo, boots under QEMU/Renode</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="roadmap">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§3</span><h2>Build phases</h2></div>
-    <p>Built incrementally — each phase is a working, testable milestone rather than a big-bang implementation. All eight are complete.</p>
-    <ul class="phases">
-      <li class="phase"><span class="n">01</span><span class="t">Task representation and context switching</span></li>
-      <li class="phase"><span class="n">02</span><span class="t">Cooperative scheduler</span></li>
-      <li class="phase"><span class="n">03</span><span class="t">Preemption via timer interrupt</span></li>
-      <li class="phase"><span class="n">04</span><span class="t">Priority scheduling + priority inversion fix</span></li>
-      <li class="phase"><span class="n">05</span><span class="t">Synchronization primitives</span><span class="d">mutex, semaphore, message queue</span></li>
-      <li class="phase"><span class="n">06</span><span class="t">Timing and delays</span><span class="d"><code>task_sleep()</code></span></li>
-      <li class="phase"><span class="n">07</span><span class="t">Testing and hardening</span><span class="d">fuzzing, stack canaries</span></li>
-      <li class="phase stretch"><span class="n">08</span><span class="t">Cortex-M4 port (stretch)</span><span class="d">boots under Renode</span></li>
-    </ul>
-  </div>
-</section>
-
-<section id="api">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§4</span><h2>Kernel API</h2></div>
-    <p>The public surface, in full — everything else in <code>src/</code> is internal to the scheduler and sync primitives.</p>
-    <div class="table-scroll">
-    <table>
-      <thead><tr><th>Function</th><th>What it does</th></tr></thead>
-      <tbody>
-        <tr><td class="fn"><code>task_spawn(name, entry, arg, priority)</code></td><td>Creates a task with the default stack size and registers it with the scheduler in one call — the usual way to start a task</td></tr>
-        <tr><td class="fn"><code>task_create(name, entry, arg, priority, stack_size, return_ctx)</code></td><td>Lower-level: allocates a stack and sets up the initial context without registering it anywhere</td></tr>
-        <tr><td class="fn"><code>task_yield()</code></td><td>Current task voluntarily gives up the CPU</td></tr>
-        <tr><td class="fn"><code>task_sleep(ms)</code></td><td>Blocks the current task until the given number of ticks has elapsed</td></tr>
-        <tr><td class="fn"><code>scheduler_run()</code></td><td>Starts the kernel's main loop; returns once every task has terminated</td></tr>
-        <tr><td class="fn"><code>scheduler_enable_preemption(tick_ms, ticks_per_slice)</code></td><td>Starts the <code>SIGALRM</code>-driven tick that forces context switches (paired <code>_disable_</code> stops it)</td></tr>
-        <tr><td class="fn"><code>scheduler_reset()</code></td><td>Clears ready-queue bookkeeping so a test harness can boot the scheduler fresh per case</td></tr>
-        <tr><td class="fn"><code>mutex_init(m, priority_inheritance)</code> / <code>mutex_lock</code> / <code>mutex_unlock</code></td><td>Blocking mutual exclusion, with optional priority inheritance</td></tr>
-        <tr><td class="fn"><code>sem_init(s, count)</code> / <code>sem_wait</code> / <code>sem_post</code></td><td>Counting semaphore operations</td></tr>
-        <tr><td class="fn"><code>queue_init(q, buffer, capacity)</code> / <code>queue_send</code> / <code>queue_receive</code></td><td>Blocking bounded message queue</td></tr>
-        <tr><td class="fn"><code>task_canary_ok(task)</code></td><td>Checks a task's stack guard region; used internally on every dispatch</td></tr>
-      </tbody>
-    </table>
-    </div>
-  </div>
-</section>
-
-<section id="tests">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§5</span><h2>Test suite</h2></div>
-    <p><code>make test</code> builds and runs these seven, in order — each prints a <code>PASS: ...</code> line and exits 0, or aborts on a failed <code>assert()</code> with the file/line.</p>
-    <ol class="tests">
-      <li class="test"><div><div class="name">test_harness</div><div class="desc">Boots the scheduler fresh via <code>scheduler_reset()</code> for three independent cases: round-robin fairness, priority ordering, and confirming a reset really does start clean.</div></div></li>
-      <li class="test"><div><div class="name">test_preemption</div><div class="desc">A non-yielding busy-loop task still gets preempted by the tick timer, and another task still gets to run.</div></div></li>
-      <li class="test"><div><div class="name">test_priority_inversion</div><div class="desc">Asserts inversion occurs without priority inheritance and is resolved with it, using tick-count bounds.</div></div></li>
-      <li class="test"><div><div class="name">test_scheduling</div><div class="desc">4 tasks round-robin fairly under <code>task_yield()</code>.</div></div></li>
-      <li class="test"><div><div class="name">test_stress</div><div class="desc">600 short-lived tasks across 30 waves; nothing crashes and canaries stay intact throughout.</div></div></li>
-      <li class="test"><div><div class="name">test_sync_primitives</div><div class="desc">A producer/consumer pair through a queue smaller than the item count — every item arrives exactly once, in order.</div></div></li>
-      <li class="test"><div><div class="name">test_timing</div><div class="desc"><code>task_sleep()</code> wakes a task on schedule, and per-task run/ready tick stats accumulate sensibly.</div></div></li>
-    </ol>
-  </div>
-</section>
-
-<section id="validation">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§6</span><h2>Memory &amp; concurrency validation</h2></div>
-    <p class="lede">Validated with AddressSanitizer + UndefinedBehaviorSanitizer rather than the "usual" Valgrind/ThreadSanitizer answer — for reasons, not by default:</p>
-    <div class="notes" style="margin-top:16px;">
-      <div class="note">
-        <div class="tag">Why not Valgrind</div>
-        <p>Not installed in this project's environment, and no passwordless sudo to add it. AddressSanitizer catches the same leak/overflow/use-after-free class of bug — <code>test_stress.c</code>'s 600 create/destroy cycles are the main leak-check target. It doesn't fully support <code>makecontext</code>/<code>swapcontext</code>, by its own warning; no false positives were seen across many runs regardless.</p>
-      </div>
-      <div class="note">
-        <div class="tag">Why not ThreadSanitizer</div>
-        <p>Every "task" is a cooperative or signal-preempted green thread on a single real OS thread — there's no actual concurrent memory access for TSan to instrument, so a clean run wouldn't prove much. The correctness property that matters — every item arrives exactly once, in order, through a queue too small to avoid blocking — is checked with plain assertions in <code>test_sync_primitives.c</code> instead.</p>
-      </div>
-      <div class="note">
-        <div class="tag">Stack canaries</div>
-        <p>A guard region is written at the bottom (low-address end) of every task's stack at creation and checked on every dispatch. There's deliberately no "top" guard: <code>makecontext()</code> itself writes into that end of the buffer before the task ever runs once, so a guard there would misfire on setup, not on real corruption.</p>
+      <h3 style="margin-top:36px;">Two build targets, one design</h3>
+      <p style="margin-bottom:0;">The context-switch code is also ported to real Cortex-M4 assembly and boots under QEMU (primary) and Renode (<code>rtos/arm/</code>) — deliberately a small proof that the design ports to real hardware, not a re-implementation of Phases 2–7 on top of it.</p>
+      <div class="grid-2">
+        <div>
+          <div class="col-head">Host-native — src/</div>
+          <ul>
+            <li>Context switch via <code>swapcontext()</code> (<code>task.c</code>)</li>
+            <li>Tick source: <code>setitimer</code> + <code>SIGALRM</code></li>
+            <li>Stack: <code>malloc()</code>'d buffer + <code>ucontext_t</code></li>
+            <li>Full kernel: priority-aware round robin, sync primitives, sleep, canaries, stack high-water mark, context-switch counter</li>
+          </ul>
+        </div>
+        <div>
+          <div class="col-head">Cortex-M4 — arm/</div>
+          <ul>
+            <li>Context switch via <code>PendSV_Handler</code> (<code>context_switch.s</code>)</li>
+            <li>Tick source: real <code>SysTick</code></li>
+            <li>Stack: fixed array + hand-built exception frame (<code>kernel_arm.c</code>)</li>
+            <li>Round robin only — a minimal 2-task demo, boots under QEMU/Renode</li>
+          </ul>
+        </div>
       </div>
     </div>
-    <pre class="mono">make clean &amp;&amp; make SANITIZE=address,undefined
+  </section>
+
+  <section id="roadmap">
+    <div class="wrap">
+      <div class="section-head"><span class="num">§3</span><h2>Build phases</h2></div>
+      <p>Built incrementally — each phase is a working, testable milestone rather than a big-bang implementation. All eight are complete.</p>
+      <ul class="phases">
+        <li class="phase"><span class="n">01</span><span class="t">Task representation and context switching</span></li>
+        <li class="phase"><span class="n">02</span><span class="t">Cooperative scheduler</span></li>
+        <li class="phase"><span class="n">03</span><span class="t">Preemption via timer interrupt</span></li>
+        <li class="phase"><span class="n">04</span><span class="t">Priority scheduling + priority inversion fix</span></li>
+        <li class="phase"><span class="n">05</span><span class="t">Synchronization primitives</span><span class="d">mutex, semaphore, message queue</span></li>
+        <li class="phase"><span class="n">06</span><span class="t">Timing and delays</span><span class="d"><code>task_sleep()</code></span></li>
+        <li class="phase"><span class="n">07</span><span class="t">Testing and hardening</span><span class="d">fuzzing, stack canaries</span></li>
+        <li class="phase stretch"><span class="n">08</span><span class="t">Cortex-M4 port (stretch)</span><span class="d">boots under QEMU + Renode</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="api">
+    <div class="wrap">
+      <div class="section-head"><span class="num">§4</span><h2>Kernel API</h2></div>
+      <p>The public surface, in full — everything else in <code>src/</code> is internal to the scheduler and sync primitives.</p>
+      <div class="table-scroll">
+      <table>
+        <thead><tr><th>Function</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td class="fn"><code>task_spawn(name, entry, arg, priority)</code></td><td>Creates a task with the default stack size and registers it with the scheduler in one call — the usual way to start a task</td></tr>
+          <tr><td class="fn"><code>task_create(name, entry, arg, priority, stack_size, return_ctx)</code></td><td>Lower-level: allocates a stack and sets up the initial context without registering it anywhere</td></tr>
+          <tr><td class="fn"><code>task_yield()</code></td><td>Current task voluntarily gives up the CPU</td></tr>
+          <tr><td class="fn"><code>task_sleep(ms)</code></td><td>Blocks the current task until the given number of ticks has elapsed</td></tr>
+          <tr><td class="fn"><code>scheduler_run()</code></td><td>Starts the kernel's main loop; returns once every task has terminated</td></tr>
+          <tr><td class="fn"><code>scheduler_enable_preemption(tick_ms, ticks_per_slice)</code></td><td>Starts the <code>SIGALRM</code>-driven tick that forces context switches (paired <code>_disable_</code> stops it)</td></tr>
+          <tr><td class="fn"><code>scheduler_reset()</code></td><td>Clears ready-queue bookkeeping so a test harness can boot the scheduler fresh per case</td></tr>
+          <tr><td class="fn"><code>scheduler_switch_count()</code></td><td>Real context-switch counter (Phase 8) — distinct from the tick counter, since not every tick causes a switch and not every switch needs a tick</td></tr>
+          <tr><td class="fn"><code>mutex_init(m, priority_inheritance)</code> / <code>mutex_lock</code> / <code>mutex_unlock</code></td><td>Blocking mutual exclusion, with optional priority inheritance</td></tr>
+          <tr><td class="fn"><code>sem_init(s, count)</code> / <code>sem_wait</code> / <code>sem_post</code></td><td>Counting semaphore operations</td></tr>
+          <tr><td class="fn"><code>queue_init(q, buffer, capacity)</code> / <code>queue_send</code> / <code>queue_receive</code></td><td>Blocking bounded message queue</td></tr>
+          <tr><td class="fn"><code>task_canary_ok(task)</code></td><td>Checks a task's stack guard region; used internally on every dispatch</td></tr>
+          <tr><td class="fn"><code>task_stack_high_water_mark(task)</code></td><td>Peak stack bytes ever used (Phase 8) — the whole stack is poisoned at creation and this scans for the deepest point ever touched</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tests">
+    <div class="wrap">
+      <div class="section-head"><span class="num">§5</span><h2>Test suite</h2></div>
+      <p><code>make test</code> builds and runs these, in order — each prints a <code>PASS: ...</code> line and exits 0, or aborts on a failed <code>assert()</code> with the file/line.</p>
+      <ol class="tests">
+        <li class="test"><div><div class="name">test_harness</div><div class="desc">Boots the scheduler fresh via <code>scheduler_reset()</code> for three independent cases: round-robin fairness, priority ordering, and confirming a reset really does start clean.</div></div></li>
+        <li class="test"><div><div class="name">test_preemption</div><div class="desc">A non-yielding busy-loop task still gets preempted by the tick timer, and another task still gets to run.</div></div></li>
+        <li class="test"><div><div class="name">test_priority_inversion</div><div class="desc">Asserts inversion occurs without priority inheritance and is resolved with it, using tick-count bounds.</div></div></li>
+        <li class="test"><div><div class="name">test_scheduling</div><div class="desc">4 tasks round-robin fairly under <code>task_yield()</code>.</div></div></li>
+        <li class="test"><div><div class="name">test_stress</div><div class="desc">600 short-lived tasks across 30 waves; nothing crashes and canaries stay intact throughout.</div></div></li>
+        <li class="test"><div><div class="name">test_sync_primitives</div><div class="desc">A producer/consumer pair through a queue smaller than the item count — every item arrives exactly once, in order.</div></div></li>
+        <li class="test"><div><div class="name">test_timing</div><div class="desc"><code>task_sleep()</code> wakes a task on schedule, and per-task run/ready tick stats accumulate sensibly.</div></div></li>
+        <li class="test"><div><div class="name">test_diagnostics</div><div class="desc">Stack high-water mark scales with real recursion depth (not just "nonzero"), and the context-switch counter reflects real switches, not just ticks.</div></div></li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="validation">
+    <div class="wrap">
+      <div class="section-head"><span class="num">§6</span><h2>Memory &amp; concurrency validation</h2></div>
+      <p class="lede">Validated with AddressSanitizer + UndefinedBehaviorSanitizer rather than the "usual" Valgrind/ThreadSanitizer answer — for reasons, not by default:</p>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">Why not Valgrind</div>
+          <p>Not installed in this project's environment, and no passwordless sudo to add it. AddressSanitizer catches the same leak/overflow/use-after-free class of bug — <code>test_stress.c</code>'s 600 create/destroy cycles are the main leak-check target. It doesn't fully support <code>makecontext</code>/<code>swapcontext</code>, by its own warning; no false positives were seen across many runs regardless.</p>
+        </div>
+        <div class="note">
+          <div class="tag">Why not ThreadSanitizer</div>
+          <p>Every "task" is a cooperative or signal-preempted green thread on a single real OS thread — there's no actual concurrent memory access for TSan to instrument, so a clean run wouldn't prove much. The correctness property that matters — every item arrives exactly once, in order, through a queue too small to avoid blocking — is checked with plain assertions in <code>test_sync_primitives.c</code> instead.</p>
+        </div>
+        <div class="note">
+          <div class="tag">Stack canaries + high-water mark</div>
+          <p>A guard region is written at the bottom (low-address end) of every task's stack at creation and checked on every dispatch. There's deliberately no "top" guard: <code>makecontext()</code> itself writes into that end of the buffer before the task ever runs once. The rest of the stack is separately poisoned with a distinct byte so <code>task_stack_high_water_mark()</code> (Phase 8) can report real peak usage without being confused with canary corruption.</p>
+        </div>
+      </div>
+      <pre class="mono">make clean &amp;&amp; make SANITIZE=address,undefined
 make test</pre>
-  </div>
-</section>
+    </div>
+  </section>
 
-<section id="field-notes">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§7</span><h2>Field notes — Phase 8</h2></div>
-    <p>Two bugs surfaced only under real hardware exception semantics, invisible host-native:</p>
-    <div class="notes" style="margin-top:16px;">
-      <div class="note">
-        <div class="tag">01 · Boot scratch stack undersized</div>
-        <p>The first <code>PendSV</code> needs somewhere to "save" a nonexistent outgoing context before the first real task is picked. That scratch area was sized to the bare 16-word exception frame — exactly enough on paper, but it silently overflowed into the next static in <code>.bss</code>, corrupting <code>task_sp[1]</code> to 0 before it was ever read. Found by bisecting with a memory-mapped debug print over UART, not by guessing. Fixed by giving it real headroom (64 words).</p>
-      </div>
-      <div class="note">
-        <div class="tag">02 · An unrelated-looking edit reintroduced a hang</div>
-        <p>Renaming a helper and dropping a diagnostic print in <code>main.c</code> — pure refactoring, no logic change — brought back a <code>PendSV</code>/<code>SysTick</code> pending-but-never-serviced hang that only reproduces under Renode's specific emulation. The exact mechanism was never fully root-caused; what's confirmed is that the verified-working <code>main()</code> structure has to stay as-is.</p>
+  <section id="field-notes">
+    <div class="wrap">
+      <div class="section-head"><span class="num">§7</span><h2>Field notes — Cortex-M4 port</h2></div>
+      <p>Two bugs surfaced only under real hardware exception semantics, invisible host-native:</p>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">01 · Boot scratch stack undersized</div>
+          <p>The first <code>PendSV</code> needs somewhere to "save" a nonexistent outgoing context before the first real task is picked. That scratch area was sized to the bare 16-word exception frame — exactly enough on paper, but it silently overflowed into the next static in <code>.bss</code>, corrupting <code>task_sp[1]</code> to 0 before it was ever read. Found by bisecting with a memory-mapped debug print over UART, not by guessing. Fixed by giving it real headroom (64 words).</p>
+        </div>
+        <div class="note">
+          <div class="tag">02 · An unrelated-looking edit reintroduced a hang</div>
+          <p>Renaming a helper and dropping a diagnostic print in <code>main.c</code> — pure refactoring, no logic change — brought back a <code>PendSV</code>/<code>SysTick</code> pending-but-never-serviced hang that only reproduces under Renode's specific emulation. The exact mechanism was never fully root-caused; what's confirmed is that the verified-working <code>main()</code> structure has to stay as-is.</p>
+        </div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<section id="run">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§8</span><h2>Run it</h2></div>
-    <p style="margin-bottom:20px;">Needs <code>gcc</code> + POSIX (<code>ucontext.h</code>, <code>setitimer</code>) — developed and tested on Linux/WSL. The Cortex-M4 port additionally needs <code>arm-none-eabi-gcc</code> and <a href="https://renode.io/">Renode</a>.</p>
-    <pre class="mono">git clone https://github.com/vsntll/RTOS-Kernel-From-Scratch.git
+  <section id="run">
+    <div class="wrap">
+      <div class="section-head"><span class="num">§8</span><h2>Run it</h2></div>
+      <p style="margin-bottom:20px;">Needs <code>gcc</code> + POSIX (<code>ucontext.h</code>, <code>setitimer</code>) — developed and tested on Linux/WSL. The Cortex-M4 port additionally needs <code>arm-none-eabi-gcc</code> and <a href="https://renode.io/">Renode</a> or <code>qemu-system-arm</code>.</p>
+      <pre class="mono">git clone https://github.com/vsntll/RTOS-Kernel-From-Scratch.git
 cd RTOS-Kernel-From-Scratch/rtos
 make               <span class="dim"># builds the kernel, every test, every example</span>
-make test          <span class="dim"># runs all 7 tests in order</span>
+make test          <span class="dim"># runs all 8 tests in order</span>
 make examples
 ./build/examples/priority_inversion_demo</pre>
-  </div>
-</section>
-
-<section id="ros2">
-  <div class="wrap">
-    <div class="section-head"><span class="num">§9</span><h2>ROS2 client layer — Micro XRCE-DDS (Option A)</h2></div>
-    <p class="lede">
-      On top of the Cortex-M4 port, <code>xrce/</code> implements enough of the real
-      <strong>Micro XRCE-DDS Client protocol</strong> — the same wire protocol actual micro-ROS
-      boards speak over their debug UART — to interoperate with a real, unmodified
-      <code>MicroXRCEAgent</code> binary and publish into a real ROS2 graph. Not a custom
-      protocol reimplemented from imagination: every wire-format detail below is checked
-      against eProsima's reference client <em>source</em>, and verified against the actual
-      agent, logs included.
-    </p>
-
-    <h3 style="margin-top:30px;">What's implemented</h3>
-    <ul class="phases">
-      <li class="phase"><span class="n">P0</span><span class="t">Toolchain + QEMU port</span><span class="d">qemu-system-arm, ROS2 Jazzy, agent built from source</span></li>
-      <li class="phase"><span class="n">P1</span><span class="t">Serial transport framing</span><span class="d">byte-stuffed, CRC-16/ARC — unit-tested</span></li>
-      <li class="phase"><span class="n">P2</span><span class="t">CDR serialization</span><span class="d">Int32 / String / Imu, alignment-aware — unit-tested</span></li>
-      <li class="phase"><span class="n">P3</span><span class="t">Session + entity creation + WRITE_DATA</span><span class="d">CREATE_CLIENT, CREATE, WRITE_DATA — unit-tested</span></li>
-      <li class="phase"><span class="n">P4</span><span class="t">Host-side bridge — working end to end</span><span class="d"><code>ros2 topic echo</code> decodes clean data, over UDP and real serial from QEMU</span></li>
-      <li class="phase"><span class="n">P5</span><span class="t">Subscriptions — bidirectional, both transports</span><span class="d">READ_DATA/DATA driven live by a real <code>ros2 topic pub</code>, over UDP and real serial into QEMU firmware</span></li>
-      <li class="phase"><span class="n">P6</span><span class="t">Latency, throughput, fault handling — measured</span><span class="d">real round-trip latency + burst-loss numbers against actual firmware; agent-restart recovery confirmed</span></li>
-    </ul>
-
-    <h3 style="margin-top:30px;">Verified against a real agent, not just its own tests</h3>
-    <div class="notes" style="margin-top:16px;">
-      <div class="note">
-        <div class="tag">Docs vs. source: a real discrepancy</div>
-        <p>eProsima's published transport docs describe the serial framing's CRC as covering the whole frame, RFC 1662-style. The actual reference client only ever CRCs the payload. Implementing this from the docs would have produced a CRC that silently never matches the real agent's — caught by reading the reference <em>source</em>, not the prose summary.</p>
-      </div>
-      <div class="note">
-        <div class="tag">The real agent's own logs</div>
-        <p>Running this project's hand-built CREATE_CLIENT / CREATE / WRITE_DATA messages against an unmodified <code>MicroXRCEAgent</code>: its logs show <code>session established</code>, then <code>participant created</code>, <code>topic created</code>, <code>publisher created</code>, <code>datawriter created</code> — each from bytes this project constructed, not eProsima's client. Reproduces identically whether the client is a host process over UDP, or real QEMU-booted Cortex-M4 firmware talking the actual serial framing over an emulated UART — proof the transport works, not just the message construction.</p>
-      </div>
-      <div class="note">
-        <div class="tag">A real bug, traced to its actual cause</div>
-        <p><code>ros2 topic echo</code> initially rejected every sample with a payload-size mismatch, on both transports. Reading the agent's own <code>TopicPubSubType::serialize()</code> — not guessing — showed why: its generic dynamic topic type always prepends its own 4-byte CDR header, and this project's client was <em>also</em> including its own, producing a genuine double header. Fix: send just the field bytes, let the agent supply the encapsulation. <code>ros2 topic echo</code> now prints a clean, correct, monotonically increasing sequence. Full byte math in <code>xrce/docs/design.md</code>.</p>
-      </div>
-      <div class="note">
-        <div class="tag">The other direction, driven by the real ROS2 CLI</div>
-        <p>A subscription (participant/topic/subscriber/datareader + <code>READ_DATA</code>) against the same real agent, driven by a plain <code>ros2 topic pub /cmd std_msgs/msg/Int32 "{data: 99}" --once</code> — nothing from this project on the publishing end. This project's client printed <code>received /cmd data=99</code>. <code>DATA</code>'s sample bytes turned out to be header-less too, the mirror image of the WRITE_DATA fix above. Another real bug found the same way: <code>READ_DATA</code> defaulted to a one-shot read (the agent treats an omitted delivery control as <code>max_samples(1)</code>, not unlimited) — the first value arrived, the second silently didn't, until fixed to request <code>max_samples = 0xFFFF</code> explicitly.</p>
-      </div>
-      <div class="note">
-        <div class="tag">Same subscription, over real serial into QEMU firmware</div>
-        <p><code>ros2 topic pub /setpoint std_msgs/msg/Int32 "{data: 4242}" --once</code> against a real agent produced exactly <code>setpoint updated: 4242</code> in the QEMU-booted firmware's own UART output — confirmed repeatedly, including a negative value to check sign handling.</p>
-      </div>
-      <div class="note">
-        <div class="tag">When the debugging tool is the bug</div>
-        <p>Getting there took chasing what looked like a real delivery failure through two rounds — both turned out to be bugs in the debug tooling, not the implementation: a relay pty left in default echo mode was corrupting the very binary traffic it existed to observe, and a log search missed text that really was there, just split across two log lines by the relay's read boundaries. Reconstructing the full byte stream instead of grepping line-by-line found the correct value present from the very first "failing" test. Full account in <code>xrce/docs/design.md</code>.</p>
-      </div>
-      <div class="note">
-        <div class="tag">Latency and throughput, measured not estimated</div>
-        <p>The firmware echoes every received setpoint back out on <code>rt/pong</code>; <code>host/bench_latency.c</code> times the real round trip through the actual firmware. Paced one at a time: <code>min=4.33ms p50=6.50ms mean=6.69ms p95=12.46ms max=12.46ms</code>. Fired as a true back-to-back burst instead: 40% loss at 5 messages, 80% at 30 — a real limit of this implementation (UART RX is polled, not interrupt-driven, no FIFO), stated plainly rather than glossed over.</p>
-      </div>
-      <div class="note">
-        <div class="tag">Fault handling, tested directly</div>
-        <p>Killed the serial agent process mid-session with the firmware left running untouched, then started a fresh agent on the same device: every entity reappeared automatically via the same periodic re-announcement built for the boot-timing race — no firmware restart, no code change. Confirmed functionally recovered (not just entity-recreated) by running the latency benchmark immediately after and getting real round trips back.</p>
-      </div>
     </div>
+  </section>
+</div>
 
-    <h3 style="margin-top:30px;">Try it</h3>
-    <pre class="mono">cd xrce &amp;&amp; make test          <span class="dim"># host-native unit tests, no agent needed</span>
+<!-- ============================== TAB: ROS2 FOUNDATION (Phases 0-6) ============================== -->
+<div class="tab-panel" id="tab-ros2">
+  <section class="no-rule">
+    <div class="wrap" style="padding-top:36px;">
+      <div class="label" style="margin-bottom:8px;">PART 2 · PHASES 0–6</div>
+      <div class="section-head"><span class="num">§9</span><h2>ROS2 client layer — Micro XRCE-DDS (Option A)<span class="status-pill">verified live</span></h2></div>
+      <p class="lede">
+        On top of the Cortex-M4 port, <code>xrce/</code> implements enough of the real
+        <strong>Micro XRCE-DDS Client protocol</strong> — the same wire protocol actual micro-ROS
+        boards speak over their debug UART — to interoperate with a real, unmodified
+        <code>MicroXRCEAgent</code> binary and publish into a real ROS2 graph. Not a custom
+        protocol reimplemented from imagination: every wire-format detail below is checked
+        against eProsima's reference client <em>source</em>, and verified against the actual
+        agent, logs included. This is the foundation Phase 7 (next tab) builds on.
+      </p>
+
+      <h3 style="margin-top:30px;">What's implemented</h3>
+      <ul class="phases">
+        <li class="phase"><span class="n">P0</span><span class="t">Toolchain + QEMU port</span><span class="d">qemu-system-arm, ROS2 Jazzy, agent built from source</span></li>
+        <li class="phase"><span class="n">P1</span><span class="t">Serial transport framing</span><span class="d">byte-stuffed, CRC-16/ARC — unit-tested</span></li>
+        <li class="phase"><span class="n">P2</span><span class="t">CDR serialization</span><span class="d">Int32 / String / Imu, alignment-aware — unit-tested</span></li>
+        <li class="phase"><span class="n">P3</span><span class="t">Session + entity creation + WRITE_DATA</span><span class="d">CREATE_CLIENT, CREATE, WRITE_DATA — unit-tested</span></li>
+        <li class="phase"><span class="n">P4</span><span class="t">Host-side bridge — working end to end</span><span class="d"><code>ros2 topic echo</code> decodes clean data, over UDP and real serial from QEMU</span></li>
+        <li class="phase"><span class="n">P5</span><span class="t">Subscriptions — bidirectional, both transports</span><span class="d">READ_DATA/DATA driven live by a real <code>ros2 topic pub</code>, over UDP and real serial into QEMU firmware</span></li>
+        <li class="phase"><span class="n">P6</span><span class="t">Latency, throughput, fault handling — measured</span><span class="d">real round-trip latency + burst-loss numbers against actual firmware; agent-restart recovery confirmed</span></li>
+      </ul>
+
+      <h3 style="margin-top:30px;">Verified against a real agent, not just its own tests</h3>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">Docs vs. source: a real discrepancy</div>
+          <p>eProsima's published transport docs describe the serial framing's CRC as covering the whole frame, RFC 1662-style. The actual reference client only ever CRCs the payload. Implementing this from the docs would have produced a CRC that silently never matches the real agent's — caught by reading the reference <em>source</em>, not the prose summary.</p>
+        </div>
+        <div class="note">
+          <div class="tag">The real agent's own logs</div>
+          <p>Running this project's hand-built CREATE_CLIENT / CREATE / WRITE_DATA messages against an unmodified <code>MicroXRCEAgent</code>: its logs show <code>session established</code>, then <code>participant created</code>, <code>topic created</code>, <code>publisher created</code>, <code>datawriter created</code> — each from bytes this project constructed, not eProsima's client. Reproduces identically whether the client is a host process over UDP, or real QEMU-booted Cortex-M4 firmware talking the actual serial framing over an emulated UART — proof the transport works, not just the message construction.</p>
+        </div>
+        <div class="note">
+          <div class="tag">A real bug, traced to its actual cause</div>
+          <p><code>ros2 topic echo</code> initially rejected every sample with a payload-size mismatch, on both transports. Reading the agent's own <code>TopicPubSubType::serialize()</code> — not guessing — showed why: its generic dynamic topic type always prepends its own 4-byte CDR header, and this project's client was <em>also</em> including its own, producing a genuine double header. Fix: send just the field bytes, let the agent supply the encapsulation. <code>ros2 topic echo</code> now prints a clean, correct, monotonically increasing sequence. Full byte math in <code>xrce/docs/design.md</code>.</p>
+        </div>
+        <div class="note">
+          <div class="tag">The other direction, driven by the real ROS2 CLI</div>
+          <p>A subscription (participant/topic/subscriber/datareader + <code>READ_DATA</code>) against the same real agent, driven by a plain <code>ros2 topic pub /cmd std_msgs/msg/Int32 "{data: 99}" --once</code> — nothing from this project on the publishing end. This project's client printed <code>received /cmd data=99</code>. <code>DATA</code>'s sample bytes turned out to be header-less too, the mirror image of the WRITE_DATA fix above. Another real bug found the same way: <code>READ_DATA</code> defaulted to a one-shot read (the agent treats an omitted delivery control as <code>max_samples(1)</code>, not unlimited) — the first value arrived, the second silently didn't, until fixed to request <code>max_samples = 0xFFFF</code> explicitly.</p>
+        </div>
+        <div class="note">
+          <div class="tag">Same subscription, over real serial into QEMU firmware</div>
+          <p><code>ros2 topic pub /setpoint std_msgs/msg/Int32 "{data: 4242}" --once</code> against a real agent produced exactly <code>setpoint updated: 4242</code> in the QEMU-booted firmware's own UART output — confirmed repeatedly, including a negative value to check sign handling.</p>
+        </div>
+        <div class="note">
+          <div class="tag">When the debugging tool is the bug</div>
+          <p>Getting there took chasing what looked like a real delivery failure through two rounds — both turned out to be bugs in the debug tooling, not the implementation: a relay pty left in default echo mode was corrupting the very binary traffic it existed to observe, and a log search missed text that really was there, just split across two log lines by the relay's read boundaries. Reconstructing the full byte stream instead of grepping line-by-line found the correct value present from the very first "failing" test. Full account in <code>xrce/docs/design.md</code>.</p>
+        </div>
+        <div class="note">
+          <div class="tag">Fault handling, tested directly</div>
+          <p>Killed the serial agent process mid-session with the firmware left running untouched, then started a fresh agent on the same device: every entity reappeared automatically via the same periodic re-announcement built for the boot-timing race — no firmware restart, no code change. Confirmed functionally recovered (not just entity-recreated) by running the latency benchmark immediately after and getting real round trips back.</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:30px;">Latency and throughput, measured not estimated</h3>
+      <div class="stat-row">
+        <div class="stat"><div class="sv">4.33ms</div><div class="sl">min round trip</div></div>
+        <div class="stat"><div class="sv">6.50ms</div><div class="sl">p50</div></div>
+        <div class="stat"><div class="sv">12.46ms</div><div class="sl">p95 / max</div></div>
+        <div class="stat"><div class="sv">40% → 80%</div><div class="sl">burst loss, 5 → 30 msgs</div></div>
+      </div>
+      <p>The firmware echoes every received setpoint back out on <code>rt/pong</code>; <code>host/bench_latency.c</code> times the real round trip through the actual firmware, paced one at a time. Fired as a true back-to-back burst instead, loss climbs fast — a real limit of this implementation (UART RX is polled, not interrupt-driven, no FIFO), stated plainly rather than glossed over. This exact gap (no reliable retransmission) is what Phase 7c closes.</p>
+
+      <h3 style="margin-top:30px;">Try it</h3>
+      <pre class="mono">cd xrce &amp;&amp; make test          <span class="dim"># host-native unit tests, no agent needed</span>
 
 <span class="dim"># against a real agent over UDP (after host/setup_wsl.sh):</span>
 MicroXRCEAgent udp4 -p 8888 &amp;
@@ -915,8 +1046,273 @@ gcc -Ixrce/include host/live_subscribe_demo.c xrce/build/libxrce.a -o /tmp/sub
 gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
 /tmp/bench 127.0.0.1 8888 20          <span class="dim"># sequential round trips</span>
 /tmp/bench 127.0.0.1 8888 burst 30    <span class="dim"># back-to-back burst, measures loss</span></pre>
-  </div>
-</section>
+    </div>
+  </section>
+</div>
+
+<!-- ============================== TAB: PHASE 7 ============================== -->
+<div class="tab-panel" id="tab-phase7">
+  <section class="no-rule">
+    <div class="wrap" style="padding-top:36px;">
+      <div class="label" style="margin-bottom:8px;">PART 2 · PHASE 7</div>
+      <h2 style="font-size:1.6rem;">Deepen the middleware<span class="status-pill">7a–7d complete</span></h2>
+      <p class="lede" style="margin-top:10px;">
+        Moving from "pub/sub demo" to "credible middleware implementation": closing the gaps
+        between the simplified Phase 0–6 protocol and what real DDS/micro-ROS actually
+        guarantees — the full entity lifecycle, services and actions, QoS that changes real
+        transport behavior, and callback dispatch driven by real task priorities.
+      </p>
+      <div class="subnav">
+        <a href="#p7a">7a · DELETE</a>
+        <a href="#p7b">7b · Services &amp; Actions</a>
+        <a href="#p7c">7c · QoS enforced</a>
+        <a href="#p7d">7d · Priority executor</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="p7a">
+    <div class="wrap">
+      <div class="section-head"><span class="num">7a</span><h2>Close the entity-lifecycle gap: DELETE<span class="status-pill">verified live</span></h2></div>
+      <p class="lede">Session/create already worked end to end (Phase 4's milestone: <code>ros2 topic list</code>/<code>echo</code> already ran against zero custom bridge code). The literal remaining gap was DELETE.</p>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">Ground-truthed, not guessed</div>
+          <p><code>xrce_session_build_delete()</code> sends exactly <code>request_id + object_id</code>, no XML — confirmed against a fresh clone of the reference client (<code>SUBMESSAGE_ID_DELETE = 3</code>, <code>common_create_entities.c</code>'s own "no padding" comment). <code>test_session.c</code> hand-computes the full expected byte sequence, same standard as the existing CREATE_CLIENT test.</p>
+        </div>
+        <div class="note">
+          <div class="tag">Proof the entity actually stops existing</div>
+          <p><code>host/live_delete_demo.c</code> creates <code>rt/delete_test</code>, and a real <code>ros2 topic list</code> shows <code>/delete_test</code> while it exists — then, after DELETE, a second real <code>ros2 topic list</code> shows it gone. Not just "the agent replied OK".</p>
+        </div>
+      </div>
+      <pre class="mono">=== ros2 topic list WHILE ENTITY EXISTS ===
+/delete_test
+/parameter_events
+/rosout
+=== ros2 topic list AFTER DELETE ===
+/parameter_events
+/rosout</pre>
+    </div>
+  </section>
+
+  <section id="p7b">
+    <div class="wrap">
+      <div class="section-head"><span class="num">7b</span><h2>Services and actions<span class="status-pill">verified live</span></h2></div>
+      <p class="lede">Needed for anything that isn't fire-and-forget — "get current task list," "trigger a self-test," "run a calibration routine that reports progress and can be cancelled."</p>
+
+      <h3 style="margin-top:26px;">Services</h3>
+      <p>REQUESTER/REPLIER entities reuse the existing CREATE/WRITE_DATA/READ_DATA machinery almost entirely unchanged — the one real addition is a 24-byte <code>SampleIdentity</code> prefix (ground-truthed against the agent's own FastDDS middleware source, not the client) that correlates a Replier's reply to its request.</p>
+      <pre class="mono">$ ros2 service call /self_test std_srvs/srv/Trigger
+response:
+std_srvs.srv.Trigger_Response(success=True, message='self-test #1 ok')</pre>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">A naming gap found only by testing</div>
+          <p>The reference client's own official example creates a Requester from a bare <code>service_name</code>, letting the library derive DDS topic names. Doing exactly that got the agent to accept the Replier — but <code>ros2 service list</code> never showed it, since FastDDS's own default derivation doesn't match ROS2's DDS-RPC naming convention (<code>rq</code>/<code>rr</code> prefix + <code>Request</code>/<code>Reply</code> suffix on the fully-qualified name). Confirmed by standing up a real <code>rclpy</code> service and comparing. Fixed by setting <code>&lt;request_topic_name&gt;</code>/<code>&lt;reply_topic_name&gt;</code> explicitly.</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:30px;">Actions</h3>
+      <p>Turned out to need no new XRCE protocol work at all: per ROS2's own design docs, an action is just three services (<code>send_goal</code>, <code>cancel_goal</code>, <code>get_result</code>) and two topics (<code>feedback</code>, <code>status</code>) under a naming convention — entirely built from what services above and Phase 4's plain topics already provide. The synthesized wrapper types' exact field layout came from reading the real generated ROS2 headers under <code>/opt/ros/jazzy/include/</code>, not guessed.</p>
+      <pre class="mono">$ ros2 action send_goal /fibonacci example_interfaces/action/Fibonacci "{order: 5}" --feedback
+Feedback: sequence: [0]
+Feedback: sequence: [0, 1]
+Feedback: sequence: [0, 1, 1]
+Feedback: sequence: [0, 1, 1, 2]
+Feedback: sequence: [0, 1, 1, 2, 3]
+Result:   sequence: [0, 1, 1, 2, 3]
+Goal finished with status: SUCCEEDED</pre>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">A held request, not a polled one</div>
+          <p>The first version replied "not ready yet" and dropped a GetResult request if the goal wasn't done, assuming a real client would retry. It doesn't: <code>ros2 action send_goal --feedback</code> sends GetResult exactly once, right after goal acceptance, then just waits — confirmed by it never printing a <code>Result:</code> section at all with the polling version. Fixed by holding the request's identity and replying only once the goal reaches a terminal state.</p>
+        </div>
+        <div class="note">
+          <div class="tag">Cancellation, verified with the real ActionClient</div>
+          <p>The <code>ros2 action</code> CLI has no <code>cancel_goal</code> subcommand, so cancellation was verified with a small script using the standard <code>rclpy</code> <code>ActionClient</code> directly (the same library the CLI itself uses): sends <code>{order: 20}</code>, waits for 4 feedback messages, calls <code>cancel_goal_async()</code>, gets back a real <code>CancelGoal_Response(return_code=0, ...)</code>, then a final status of CANCELED with the sequence frozen at exactly the 4 values already sent.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="p7c">
+    <div class="wrap">
+      <div class="section-head"><span class="num">7c</span><h2>QoS profiles, enforced for real<span class="status-pill">verified under real 35% loss</span></h2></div>
+      <p class="lede">Reliable vs. best-effort delivery, and history depth, actually changing transport behavior (retries/buffering) — not accepted and ignored.</p>
+      <p><code>host/udp_loss_proxy.py</code> sits between the client and a real agent, dropping a configured percentage of datagrams each direction. <code>host/bench_qos.c</code> publishes the same 20-sample sequence on a best-effort topic and a reliable one through it, and reports what actually happened:</p>
+      <pre class="mono">best-effort: sent 20 samples in 0ms, no retries (none possible)
+reliable:    sent 20 samples in 1667ms across 8 heartbeat round(s), 43 retransmitted
+             byte-for-byte, last_acknown=19 (fully acked once it reaches 19)</pre>
+      <div class="stat-row">
+        <div class="stat"><div class="sv">100%</div><div class="sl">delivery confirmed to agent, reliable, every run</div></div>
+        <div class="stat"><div class="sv">14 / 20</div><div class="sl">reliable topic, real subscriber</div></div>
+        <div class="stat"><div class="sv">6 / 20</div><div class="sl">best-effort topic, same run</div></div>
+        <div class="stat"><div class="sv">35%</div><div class="sl">induced loss, each direction</div></div>
+      </div>
+      <p><code>last_acknown</code> reaching its target is a hard, deterministic proof every sample the reliable stream sent was eventually confirmed delivered — best-effort has no equivalent mechanism at all: whatever the proxy drops on that hop is gone, silently, forever. A real, separate <code>ros2 topic echo</code> subscriber downstream shows the same story with real numbers, consistently more than double for reliable, run after run.</p>
+      <p>QoS is also wired into the real DDS entity itself via the CREATE XML (<code>&lt;historyQos&gt;</code> inside <code>&lt;topic&gt;</code>, <code>&lt;qos&gt;&lt;reliability&gt;</code> as its sibling) — a shape found only by reading the agent's own XML-parser rejection log, since two plausible shapes taken from public FastDDS docs were both rejected first.</p>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">A session must keep one address</div>
+          <p>An early version sent setup directly to the agent and only routed data through the lossy proxy. The agent correlates a session with the UDP <em>source address</em> later traffic arrives from; since the proxy relays through one fixed socket, the agent saw a different address for data than for setup and silently dropped all of it — confirmed by temporary per-packet proxy logging showing every packet forwarded correctly while the agent's own log recorded nothing. Fixed by routing everything through the same proxy.</p>
+        </div>
+        <div class="note">
+          <div class="tag">A resent identical CREATE gets no second reply</div>
+          <p>The agent's best-effort input stream tracks the last sequence number processed per stream and silently drops an exact-byte resend as a replay. Fixed by rebuilding each retry fresh, so every attempt gets its own sequence number — which surfaced a second real finding: some CREATE-of-an-existing-entity replies come back <code>ALREADY_EXISTS</code> (0x82), not <code>OK_MATCHED</code> as earlier phases had assumed.</p>
+        </div>
+        <div class="note">
+          <div class="tag">A reliable stream must start its own counting at 0</div>
+          <p>This project's session tracks one sequence counter shared across every stream it uses. Setup traffic on the best-effort stream had already advanced it well past 0 by the time the reliable stream was first used, so its first WRITE_DATA carried a sequence number the agent had never seen a stream start at — its ACKNACK correctly, faithfully asked for messages that were never sent <em>on that stream</em> and never could be. Found by logging the agent's actual ACKNACK values rather than assuming the mechanism was broken.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="p7d">
+    <div class="wrap">
+      <div class="section-head"><span class="num">7d</span><h2>Priority-aware executor<span class="status-pill">verified under real load</span></h2></div>
+      <p class="lede">Replaces a naive round-robin spin loop with dispatch driven by the RTOS's real task priorities — a known real limitation of the stock ROS2 executor, and a natural extension of the priority-inheritance work already in the kernel's mutex.</p>
+      <p>A non-blocking poller task drains the UDP socket and dispatches each sample into the matching topic's queue; two consumer tasks at different <code>task_spawn()</code> priorities measure real dispatch latency. <code>xrce/</code> stays free of any RTOS dependency by design, so this logic lives in <code>host/</code>, the same place the kernel and the XRCE client already get linked for the QEMU firmware demo.</p>
+      <p>Under real load from two simultaneous <code>ros2 topic pub -r 20</code> streams — the low-priority consumer deliberately doing slow, non-yielding CPU work per message:</p>
+      <pre class="mono">[high] round done: mean=3us  max=5us
+[low]  round done: mean=39144us  max=124432us</pre>
+      <div class="stat-row">
+        <div class="stat"><div class="sv">2–5µs</div><div class="sl">high-priority dispatch latency, every message</div></div>
+        <div class="stat"><div class="sv">&gt;100ms</div><div class="sl">low-priority latency, absorbing the delay</div></div>
+        <div class="stat"><div class="sv">20,000×+</div><div class="sl">the gap between them, both real</div></div>
+      </div>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">A tight poll loop can starve the agent, not just this process</div>
+          <p>The poller's first version called <code>task_yield()</code> between polls. Being the highest-priority task, that only ever leaves it READY, never BLOCKED, so it kept getting re-selected — the resulting multi-hundred-thousand-iterations-per-second spin was enough to starve the real agent process of scheduling time on this host: data an unmodified subscribe demo receives instantly at the same moment never arrived at all, confirmed by logging <code>errno=EAGAIN</code> on every poll for as long as a minute. Fixed with <code>task_sleep(1)</code> instead of a bare yield — arguably more realistic anyway, since a real embedded poll loop doesn't spin as fast as the CPU allows either.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ============================== TAB: PHASE 8 (DIAGNOSTICS) ============================== -->
+<div class="tab-panel" id="tab-phase8">
+  <section class="no-rule">
+    <div class="wrap" style="padding-top:36px;">
+      <div class="label" style="margin-bottom:8px;">PART 2 · PHASE 8</div>
+      <div class="section-head"><span class="num">§8</span><h2>Diagnostics / introspection<span class="status-pill">verified live</span></h2></div>
+      <p class="lede">A live inspector for the RTOS, running over the same transport as the ROS2 traffic — systems/tooling thinking on top of "I can move messages," and the debugging tool used to build Phase 7d.</p>
+      <p>Chose Option A from the phase brief (piggyback on ROS2 itself) over a second, out-of-band protocol: reuses everything built through Phase 7d, and targets <code>diagnostic_msgs/msg/DiagnosticArray</code> — a real, already-installed standard interface — specifically so <code>/rtos/diagnostics</code> is idiomatic and, in principle, <code>rqt_robot_monitor</code>-compatible (stated plainly: that specific tool wasn't independently run against it in this pass, only confirmed wire-compatible).</p>
+
+      <h3 style="margin-top:30px;">What's exposed, all real</h3>
+      <div class="grid-2">
+        <div>
+          <div class="col-head">Per task</div>
+          <ul>
+            <li>State — READY / RUNNING / BLOCKED</li>
+            <li>Priority</li>
+            <li>Stack high-water mark — real, poisoned-and-scanned bytes</li>
+          </ul>
+        </div>
+        <div>
+          <div class="col-head">System-wide</div>
+          <ul>
+            <li>Scheduler: real context-switch count</li>
+            <li>Queue depth (from <code>queue_t</code>'s own fields)</li>
+            <li>Middleware: bytes sent, retransmits, QoS in effect</li>
+          </ul>
+        </div>
+      </div>
+
+      <pre class="mono" style="margin-top:20px;">$ ros2 topic echo /rtos/diagnostics diagnostic_msgs/msg/DiagnosticArray
+status:
+- name: task/producer
+  message: BLOCKED
+  values: [priority: '20', stack_high_water_mark_bytes: '584', ...]
+- name: task/consumer
+  message: BLOCKED
+  values: [priority: '10', stack_high_water_mark_bytes: '536', ...]
+- name: scheduler
+  values: [tick_count: '1400', context_switch_count: '210']
+- name: queue/work
+  message: 'depth 0/4'
+- name: middleware
+  values: [bytes_sent: '5669']</pre>
+
+      <p>A <code>std_srvs/Trigger</code>-typed <code>/rtos/diagnostics/refresh</code> service (reusing 7b's Requester/Replier machinery, completely unchanged) forces an immediate publish on demand:</p>
+      <pre class="mono">$ ros2 service call /rtos/diagnostics/refresh std_srvs/srv/Trigger
+response:
+std_srvs.srv.Trigger_Response(success=True, message='refreshed')</pre>
+
+      <h3 style="margin-top:30px;">Two small, real kernel additions to make this honest</h3>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag"><code>task_stack_high_water_mark()</code></div>
+          <p>The whole stack (beyond the existing overflow-guard canary region) gets poisoned with a distinct byte at creation; the accessor scans from the bottom up for the first still-poisoned byte — the deepest point the stack pointer has ever actually reached. Verified with a proportional test, not just "nonzero": a 40-deep recursive task's HWM measurably exceeds a 2-deep one's.</p>
+        </div>
+        <div class="note">
+          <div class="tag"><code>scheduler_switch_count()</code></div>
+          <p>A real context-switch counter, deliberately distinct from the existing tick counter — a tick doesn't always cause a switch, and a switch can happen without one (a voluntary yield, or blocking on a sync primitive). Incremented at both real <code>swapcontext()</code> call sites, reset by <code>scheduler_reset()</code> like every other counter.</p>
+        </div>
+      </div>
+      <p style="margin-top:16px;">What isn't tracked — queue drop counts, missed deadlines — is stated as a known gap rather than invented: <code>queue_send()</code> blocks rather than drops by design, and this kernel has no deadline concept yet, only sleep wake times.</p>
+    </div>
+  </section>
+</div>
+
+<!-- ============================== TAB: PHASE 9 (LIVE TUI) ============================== -->
+<div class="tab-panel" id="tab-phase9">
+  <section class="no-rule">
+    <div class="wrap" style="padding-top:36px;">
+      <div class="label" style="margin-bottom:8px;">PART 2 · PHASE 9</div>
+      <div class="section-head"><span class="num">§9</span><h2>Live terminal UI<span class="status-pill">verified with a real captured screen</span></h2></div>
+      <p class="lede">An <code>htop</code>-style live view of the RTOS: task states, priorities, stack usage, and scheduler stats updating in real time, over <code>/rtos/diagnostics</code> (Phase 8) — the same demo screen-recording clip a video walkthrough of this project would end on.</p>
+
+      <div class="grid-2" style="margin-top:20px;">
+        <div>
+          <div class="col-head">Why Python + curses</div>
+          <ul>
+            <li>This environment has the ncurses <em>runtime</em> libraries but not <code>libncurses-dev</code></li>
+            <li>No non-interactive <code>sudo</code> available to install the headers — confirmed, not assumed</li>
+            <li>Python's <code>curses</code> module is a real ncurses binding, not a reimplementation</li>
+          </ul>
+        </div>
+        <div>
+          <div class="col-head">Why <code>rclpy</code>, not the hand-rolled client</div>
+          <ul>
+            <li>Phase 8 already chose "piggyback on ROS2" for <code>/rtos/diagnostics</code></li>
+            <li>It's a real, standard topic at that point — consuming it with the real client library is the idiomatic choice</li>
+            <li>This tool has no involvement in the RTOS's own embedded protocol stack the way the C demos do</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3 style="margin-top:30px;">Verified live, watching the real Phase 7d scenario</h3>
+      <p><code>host/live_priority_demo.c</code> gained its own <code>/rtos/diagnostics</code> publisher and now runs continuous rounds instead of exiting after one, so the tool has something real and ongoing to render — not a separate idle demo standing in for it. Captured with a real terminal screen (via <code>script</code>, since curses needs a real pty) while a real agent, the priority demo, and two real <code>ros2 topic pub -r 20</code> publishers all ran concurrently:</p>
+      <pre class="mono">TASK     STATE     PRIO   STACK HWM   TICKS RUN   TICKS RDY
+poller   RUNNING   100    23752       ?           ?
+high     BLOCKED   50     2056        ?           ?
+low      READY     10     2056        ?           ?
+
+scheduler: running
+  context_switch_count: 3546</pre>
+      <p>Task states genuinely flip between <code>READY</code> and <code>BLOCKED</code> frame to frame as the low-priority task falls in and out of contention — an actual moving picture of the exact scheduling behavior Phase 7d measured numerically, not a static snapshot.</p>
+
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">A discovery race, found by testing the combination</div>
+          <p><code>host/live_priority_demo.c</code> was originally a one-shot benchmark — 15 messages per topic, then exit — tuned for a clean mean/max summary. On an unloaded loopback link that finishes in well under a second, which routinely raced a fresh <code>rclpy</code> subscriber's own DDS discovery time: the demo would already be done and gone before the TUI had even finished matching with its publisher, so the screen just showed "waiting..." forever. Confirmed directly by checking <code>ps</code> mid-run. Fixed by wrapping the demo's task bodies in an outer loop so it runs continuous rounds — the per-round mean/max numbers are unchanged, just repeating.</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:30px;">Try it</h3>
+      <pre class="mono">MicroXRCEAgent udp4 -p 8888 &amp;
+gcc -Ixrce/include -Irtos/src host/live_priority_demo.c rtos/build/librtos.a xrce/build/libxrce.a -o /tmp/prio
+/tmp/prio 127.0.0.1 8888 &amp;
+
+ros2 topic pub -r 20 /priority_high std_msgs/msg/Int32 "{data: 1}" &amp;
+ros2 topic pub -r 20 /priority_low std_msgs/msg/Int32 "{data: 1}" &amp;
+
+python3 host/rtos_top.py   <span class="dim"># q to quit</span></pre>
+    </div>
+  </section>
+</div>
 
 <footer>
   <div class="wrap">
@@ -927,7 +1323,7 @@ gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
       <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/arm/README.md">arm/README.md</a>
       <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/xrce/docs/design.md">xrce/design.md</a>
     </div>
-    <div>rtos-kernel-from-scratch · C · host-native + Cortex-M4 + Micro XRCE-DDS</div>
+    <div>rtos-kernel-from-scratch · C · host-native + Cortex-M4 + Micro XRCE-DDS (services, actions, QoS, priority dispatch, diagnostics, live TUI)</div>
   </div>
 </footer>
 
@@ -959,6 +1355,67 @@ gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
     });
   })();
 
+  /* ---------- tabs, driven by the URL hash so every tab is a real, shareable link ---------- */
+  (function () {
+    var tabIds = ['overview', 'kernel', 'ros2', 'phase7', 'phase8', 'phase9'];
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+    var panels = {};
+    tabIds.forEach(function (id) { panels[id] = document.getElementById('tab-' + id); });
+
+    // sub-section ids that live inside a tab, so a link like #run or #p7c
+    // still opens the right tab first, then scrolls to that anchor.
+    var sectionToTab = {
+      why: 'kernel', architecture: 'kernel', roadmap: 'kernel', api: 'kernel',
+      tests: 'kernel', validation: 'kernel', 'field-notes': 'kernel', run: 'kernel',
+      p7a: 'phase7', p7b: 'phase7', p7c: 'phase7', p7d: 'phase7'
+    };
+
+    function resolveTab(hash) {
+      hash = (hash || '').replace('#', '');
+      if (tabIds.indexOf(hash) !== -1) { return { tab: hash, anchor: null }; }
+      if (sectionToTab[hash]) { return { tab: sectionToTab[hash], anchor: hash }; }
+      return { tab: 'overview', anchor: null };
+    }
+
+    function activate(tabId, anchor, skipScroll) {
+      if (tabIds.indexOf(tabId) === -1) { tabId = 'overview'; }
+      tabIds.forEach(function (id) {
+        if (panels[id]) { panels[id].classList.toggle('active', id === tabId); }
+      });
+      tabs.forEach(function (t) {
+        t.classList.toggle('active', t.getAttribute('data-tab') === tabId);
+      });
+      if (!skipScroll) {
+        if (anchor) {
+          var el = document.getElementById(anchor);
+          if (el) { requestAnimationFrame(function () { el.scrollIntoView({ block: 'start' }); }); }
+        } else {
+          window.scrollTo(0, 0);
+        }
+      }
+    }
+
+    // plain hyperlinks with data-tab-link jump straight to a tab (and to
+    // top of it) without fighting the browser's own hash-scroll behavior
+    document.addEventListener('click', function (e) {
+      var link = e.target.closest ? e.target.closest('a[data-tab-link], a[data-tab]') : null;
+      if (!link) { return; }
+      var tabId = link.getAttribute('data-tab') || link.getAttribute('data-tab-link');
+      if (tabIds.indexOf(tabId) === -1) { return; }
+      e.preventDefault();
+      history.pushState(null, '', '#' + tabId);
+      activate(tabId, null, false);
+    });
+
+    window.addEventListener('hashchange', function () {
+      var r = resolveTab(location.hash);
+      activate(r.tab, r.anchor, false);
+    });
+
+    var initial = resolveTab(location.hash);
+    activate(initial.tab, initial.anchor, false);
+  })();
+
   (function () {
     console.log('%c rtos-kernel-from-scratch ', 'background:#b9722a;color:#fff;font-family:monospace;padding:3px 8px;border-radius:2px;');
     console.log('%cscheduler_run() started. you found devtools — hi.\nsource: https://github.com/vsntll/RTOS-Kernel-From-Scratch', 'color:#8891a0;font-family:monospace;');
@@ -974,6 +1431,8 @@ gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
 
     function runInversionDemo() {
       clearTimers();
+      var overviewWasActive = document.getElementById('tab-overview').classList.contains('active');
+      if (!overviewWasActive) { return; } // the scope diagram only exists on the overview tab
       document.body.classList.add('egg-panic');
       toast.classList.remove('resolved');
       toast.classList.add('show');
