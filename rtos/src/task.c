@@ -53,6 +53,12 @@ task_t *task_create(const char *name, task_entry_t entry, void *arg,
         free(task);
         return NULL;
     }
+    if (task->stack_size >= 2 * TASK_CANARY_SIZE) {
+        memset(task->stack, TASK_CANARY_BYTE, TASK_CANARY_SIZE);
+        memset(task->stack + task->stack_size - TASK_CANARY_SIZE,
+               TASK_CANARY_BYTE, TASK_CANARY_SIZE);
+    }
+
     task->context.uc_stack.ss_sp = task->stack;
     task->context.uc_stack.ss_size = task->stack_size;
     /* Must happen before makecontext() -- see the note on return_ctx in
@@ -77,4 +83,32 @@ void task_destroy(task_t *task) {
 
 void context_switch(task_t *old, task_t *new) {
     swapcontext(&old->context, &new->context);
+}
+
+int task_canary_ok(const task_t *task) {
+    if (task->stack_size < 2 * TASK_CANARY_SIZE) {
+        return 1; /* stack too small to have planted canaries at all */
+    }
+    for (size_t i = 0; i < TASK_CANARY_SIZE; i++) {
+        if (task->stack[i] != TASK_CANARY_BYTE) {
+            return 0;
+        }
+    }
+    const unsigned char *top = task->stack + task->stack_size - TASK_CANARY_SIZE;
+    for (size_t i = 0; i < TASK_CANARY_SIZE; i++) {
+        if (top[i] != TASK_CANARY_BYTE) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void task_check_canary_or_abort(const task_t *task) {
+    if (!task_canary_ok(task)) {
+        fprintf(stderr,
+                "FATAL: stack canary corrupted for task '%s' (id=%d) -- "
+                "stack overflow\n",
+                task->name, task->id);
+        abort();
+    }
 }
