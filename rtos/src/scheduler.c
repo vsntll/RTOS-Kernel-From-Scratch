@@ -290,3 +290,12 @@ void task_sleep(int ms) {
     cur->state = TASK_BLOCKED;
     task_yield();
 }
+
+void scheduler_reset(void) {
+    scheduler_disable_preemption();
+
+    g_num_tasks = 0;
+    g_current_idx = -1;
+    g_tick_count = 0;
+    g_ticks_since_switch = 0;
+}
