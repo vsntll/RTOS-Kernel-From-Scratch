@@ -27,6 +27,15 @@ typedef struct task {
     int priority; /* higher value = higher priority */
     task_entry_t entry;
     void *arg;
+
+    /* Set by task_sleep(); 0 means "not sleeping" so the tick handler
+     * doesn't confuse a sleeping task with one BLOCKED on a mutex/sem. */
+    uint64_t wake_tick;
+
+    /* Timing stats (Phase 6): ticks spent actually RUNNING vs ticks spent
+     * READY-but-not-running, sampled once per timer tick. */
+    uint64_t ticks_run;
+    uint64_t ticks_ready;
 } task_t;
 
 /* Allocates a stack and sets up an initial context so that when the task

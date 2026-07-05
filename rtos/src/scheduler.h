@@ -35,4 +35,9 @@ void scheduler_enable_preemption(int tick_ms, int ticks_per_slice);
 void scheduler_disable_preemption(void);
 uint64_t scheduler_tick_count(void);
 
+/* Blocks the current task until at least `ms` milliseconds of ticks have
+ * elapsed. Requires scheduler_enable_preemption() to be active -- ticks
+ * (and therefore sleep wakeups) only advance while the timer is running. */
+void task_sleep(int ms);
+
 #endif
