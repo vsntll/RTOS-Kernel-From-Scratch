@@ -444,9 +444,9 @@ implicit:
   `sensor_msgs/Imu` at the CDR layer only, Phase 2), but wouldn't
   automatically support an arbitrary new ROS2 message type the way a real
   rosidl-generated client does.
-- No multi-node support -- one fixed client key, one fixed set of
-  hardcoded object ids per demo; running two of these at once would need
-  distinct keys/ids, not something this project's demos parametrize.
+- ~~No multi-node support~~ -- true when this was written; closed in
+  Phase 10 below (`NODE_ID`-parametrized client key/participant/topic
+  names, verified with 3 simultaneous QEMU boards under one agent).
 - Polled UART RX, no interrupt/FIFO -- see the throughput section above.
 - No on-device reply parsing/correlation -- `ros2_demo.c` never reads
   `STATUS`/`STATUS_AGENT` replies to its own requests; it re-announces
@@ -954,9 +954,91 @@ Status: implemented and verified live against a real, unmodified agent,
 `live_priority_demo.c` under real `ros2 topic pub -r` load, and a real
 captured terminal screen showing live updates.
 
+## Phase 10 — Multi-node scaling
+
+Closes the "No multi-node support" gap called out in Phase 6's known-
+limitations list above: N separately-built `rtos/arm/ros2_demo.c` firmware
+images, each booted under its own QEMU instance, all appearing as N
+distinct ROS2 nodes to **one** `MicroXRCEAgent` process -- not N agent
+processes, and not a custom host-side relay.
+
+**What actually needed to change, and what didn't.** The real agent
+already natively demuxes multiple clients on one process via its
+`multiserial` transport mode -- that's existing eProsima agent behavior,
+not something this project builds. So the work was entirely on this
+project's side of the boundary:
+- `rtos/arm/ros2_demo.c`'s `client_key` (last byte), DDS participant name,
+  and every topic name (`rt/chatter`, `rt/setpoint`, `rt/pong`) were
+  string/byte literals, fixed at one value -- exactly the limitation
+  Phase 6 flagged. Parametrized all four behind a `NODE_ID` compile-time
+  define (default 0, so `make ros2_demo` with no `NODE_ID` is
+  byte-identical to every previous phase). Topic/participant name
+  substitution uses `#x`/token-pasting stringification
+  (`"rt/chatter_" TOSTRING(NODE_ID)`) rather than runtime `snprintf`,
+  since this is still a freestanding, no-libc build.
+- `rtos/arm/Makefile` threads `NODE_ID` through as `-DNODE_ID=$(NODE_ID)`
+  and namespaces every object/ELF/BIN path by it
+  (`build/ros2/node$(NODE_ID)/`, `build/ros2_demo_node$(NODE_ID).elf`) so
+  `make ros2_demo NODE_ID=1` and `NODE_ID=2` don't clobber each other's
+  build output when run back to back.
+- `host/run_multi_node.sh` (new): builds N firmware variants, boots N
+  QEMU instances each with its own `-serial pty`, greps each instance's
+  stderr for the `/dev/pts/N` path QEMU allocates, and starts **one**
+  `MicroXRCEAgent multiserial` process spanning all of them.
+
+**A real agent-CLI gotcha found by testing, not guessed:** the obvious
+`-D /dev/pts/3 -D /dev/pts/4` (repeated flag) and `-D /dev/pts/3,/dev/pts/4`
+(comma-separated) both fail silently -- the former keeps only one device,
+the latter is parsed as one literal (bogus) path, confirmed by watching
+the agent log for both and seeing `Waiting for devices: /dev/pts/3,/dev/pts/4`
+verbatim as a single string. Reading the agent's own argument parser
+(`include/uxr/agent/utils/ArgumentParser.hpp`'s `MultiSerialArgs::devs()`
+in the `Micro-XRCE-DDS-Agent` source this project builds against) showed
+why: `-D`'s value is fed through `std::istringstream` word-splitting, so
+it wants **one shell argument, space-separated**:
+`-D "/dev/pts/3 /dev/pts/4"`. (A `-f <file>`, one path per line, works
+too -- not used here since the two-instance case doesn't need it.)
+
+**Verified live against a real, unmodified agent, 3 simultaneous QEMU
+boards:**
+- All 9 expected topics present simultaneously with zero collisions:
+  `ros2 topic list` showed `/chatter_{1,2,3}`, `/setpoint_{1,2,3}`,
+  `/pong_{1,2,3}`, each backed by a distinct `client_key`
+  (`0x52544F54`/`55`/`56` in the agent's own log, i.e. `NODE_ID`'s value
+  landing in the key's last byte exactly as intended).
+- **Independent data, not just independent names:** `ros2 topic echo
+  /chatter_1 --once` and `/chatter_2 --once` returned different counter
+  values (`17785` vs `19793`) from the two boards' independently-running
+  publish loops.
+- **Isolation under load, not just at rest:** `ros2 topic pub /setpoint_1
+  std_msgs/msg/Int32 "{data: 111}" --once` produced `data: 111` on
+  `/pong_1` (that board's real round-trip echo, same mechanism Phase 6's
+  latency benchmark uses) -- and confirmed **absent** on `/pong_2`, i.e.
+  node 2 never saw node 1's command. Two failure modes this specifically
+  rules out: the agent silently merging same-named entities across
+  clients, and this project's own firmware misrouting a datareader across
+  the two builds.
+- `ros2 node list` returns empty for both -- pre-existing behavior, not a
+  regression from this phase: these are raw XRCE-DDS participants (XML
+  entity creation over the wire), not real `rclcpp`/`rclpy` nodes, so they
+  don't publish the extra node-graph metadata `ros2 node list` looks for.
+  Topics/data are real and correct regardless; only that one introspection
+  command doesn't apply here, same as before Phase 10.
+
+**Known limitation this phase doesn't touch:** `host/udp_loss_proxy.py`
+(Phase 7c's fault-injection tool) is still hardwired 1:1 -- it wasn't
+needed for the serial/`multiserial` path this phase uses, so it wasn't
+touched. A UDP-based multi-node path, if ever wanted, would need that
+proxy generalized to N:1 (source-address-keyed forwarding) separately;
+serial's per-QEMU-instance ptys sidestepped the whole question here.
+
+Status: implemented and verified live -- 3 simultaneous QEMU boards, one
+real unmodified agent process, independently-flowing data confirmed in
+both directions, zero cross-node leakage observed.
+
 ## Later phases
 
-Every planned phase (1-9) has now landed. Future work, if any, gets
+Every planned phase (1-12) has now landed. Future work, if any, gets
 tracked at the top-level project plan level; this file's convention (a
 new dated section per phase) stops here since there are no more phases
 queued.
