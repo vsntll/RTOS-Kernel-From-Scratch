@@ -10,9 +10,12 @@ timer (`setitimer` + `SIGALRM`) stands in for a hardware tick interrupt
 (the host-native equivalent of a SysTick ISR triggering `PendSV` on a real
 Cortex-M part).
 
-An optional stretch phase ports the context-switch code to real Cortex-M
-assembly and boots it under Renode/QEMU — see `docs/design.md` for details
-— but everything in this repo works standalone on Linux/macOS/WSL first.
+The context-switch code is also ported to real Cortex-M4 assembly and
+boots under Renode (`rtos/arm/`) — a `PendSV_Handler` doing manual
+register save/restore and a real `SysTick` ISR driving preemption,
+instead of `ucontext.h`/`SIGALRM`. See `rtos/arm/README.md` for details.
+Everything else in this repo is host-native and needs no board, simulator,
+or cross-compiler.
 
 ## Why it exists
 
@@ -32,51 +35,56 @@ main() --> scheduler_run() --> [Task A] <--context_switch--> [Task B] <--> [Task
 
 ## Prerequisites
 
-| Tool | Required version | Notes |
-|------|-------------------|-------|
-| GCC or Clang | Any recent version | POSIX (`ucontext.h`, `setitimer`) support required — Linux/macOS/WSL |
-| Make | Any | Builds kernel, tests, and examples |
-| Valgrind | Any | For leak/stack-corruption checks (Phase 7) |
-| ThreadSanitizer | Bundled with GCC/Clang | For data-race checks on sync primitives (`-fsanitize=thread`) |
-| Renode / QEMU + arm-none-eabi-gcc | Optional | Only needed for the Phase 8 stretch goal (real ARM target) |
+| Tool | Notes |
+|------|-------|
+| `gcc` | Makefile invokes `gcc` directly. Needs POSIX (`ucontext.h`, `setitimer`) — Linux or WSL. Developed and tested under WSL (Ubuntu); not tested on macOS, where `ucontext.h` is present but deprecated. |
+| `make` | Builds the kernel, tests, and examples. |
+| `arm-none-eabi-gcc` + [Renode](https://renode.io/) | Only for the Phase 8 Cortex-M port (`rtos/arm/`) — not needed for anything else in this repo. |
 
-> **Note on `ucontext.h`:** deprecated on macOS but still functional; fully
-> supported on Linux/WSL. If porting to a platform without it, `setjmp`/
-> `longjmp` with manually managed stacks is a documented fallback (see
-> `docs/design.md`).
+AddressSanitizer/UndefinedBehaviorSanitizer (`-fsanitize=address,undefined`,
+bundled with GCC — just pass `SANITIZE=address,undefined`) is what this
+project was actually validated with; see [Memory and concurrency
+validation](#memory-and-concurrency-validation) for why Valgrind and
+ThreadSanitizer aren't the right tools here despite being the "usual"
+answer.
 
 ## Building
 
 ```bash
 git clone <your-repo-url>
-cd rtos
+cd RTOS-Kernel-From-Scratch/rtos
 make clean
 make
 ```
 
-Produces:
-- `build/librtos.a` — the kernel itself (task/scheduler/sync primitives)
-- `build/examples/producer_consumer` — demo of queue-based inter-task communication
-- `build/examples/priority_inversion_demo` — demo showing inversion, then the fix
-- `build/tests/*` — the test binaries described below
+Builds `build/librtos.a` (the kernel: task/scheduler/sync primitives)
+plus every test and example binary, under `build/tests/` and
+`build/examples/` respectively. `make` only builds — it doesn't run
+anything; see below for that.
 
 ## Running the examples
 
 ```bash
+make examples
+./build/examples/manual_switch_demo
 ./build/examples/producer_consumer
-```
-
-Expect interleaved output from a producer and consumer task communicating
-over a bounded queue, with no dropped or duplicated items.
-
-```bash
 ./build/examples/priority_inversion_demo
 ```
 
-Runs once with priority inheritance disabled (demonstrating the high-priority
-task getting starved by a low-priority task holding a shared lock), then
-once with inheritance enabled (showing the fix). Expected output and timing
-are documented in `docs/design.md`.
+- **`manual_switch_demo`** — Phase 1: two tasks incrementing a counter and
+  printing, switching between each other by calling `context_switch()`
+  directly. No scheduler involved yet.
+- **`producer_consumer`** — one producer and one consumer moving 20 items
+  through a capacity-4 queue, blocking in both directions (producer blocks
+  when full, consumer blocks when empty). Expect interleaved
+  `[producer] sending N` / `[consumer] received N` output, nothing dropped
+  or duplicated.
+- **`priority_inversion_demo`** — runs the classic scenario once with
+  priority inheritance disabled (a medium-priority task starves the low
+  task holding a mutex the high task needs, so high is stuck too) and once
+  with it enabled (low inherits high's priority the moment high blocks, so
+  it finishes almost immediately). Prints a narrated play-by-play with
+  actual tick counts for each run.
 
 ## Running the tests
 
@@ -84,51 +92,106 @@ are documented in `docs/design.md`.
 make test
 ```
 
-This builds and runs, in order:
+Builds and runs every test in `tests/`, in this order:
 
-1. `test_scheduling` — round-robin fairness, preemption under an
-   intentionally non-yielding task, tick accounting.
-2. `test_priority_inversion` — asserts inversion occurs without
-   inheritance and is resolved with it, using timing bounds.
-3. `test_sync_primitives` — mutex/semaphore/queue correctness under
-   concurrent producer/consumer load.
+1. **`test_harness`** — a small harness that boots the scheduler fresh
+   (via `scheduler_reset()`) for each of three independent cases: round
+   robin fairness, priority ordering, and confirming a reset really does
+   start clean.
+2. **`test_preemption`** — a non-yielding busy-loop task still gets
+   preempted by the tick timer, and another task still gets to run.
+3. **`test_priority_inversion`** — asserts inversion occurs without
+   priority inheritance and is resolved with it, using tick-count bounds.
+4. **`test_scheduling`** — 4 tasks round-robin fairly under `task_yield()`.
+5. **`test_stress`** — 600 short-lived tasks across 30 waves; nothing
+   crashes and canaries stay intact throughout.
+6. **`test_sync_primitives`** — a producer/consumer pair through a queue
+   smaller than the item count, asserting every item arrives exactly once
+   and in order.
+7. **`test_timing`** — `task_sleep()` wakes a task on schedule, and
+   per-task run/ready tick stats accumulate sensibly.
 
-All tests should pass with a clean exit code; failures print which
-assertion tripped and the task/tick state at that point.
+Each prints a `PASS: ...` line and exits 0 on success; a failed `assert()`
+aborts with the file/line and the C library's usual `Assertion failed`
+message.
 
 ## Memory and concurrency validation
 
 ```bash
-# Leak / stack-corruption check
-valgrind --leak-check=full ./build/examples/producer_consumer
-
-# Data race check (requires building with -fsanitize=thread)
-make clean && make SANITIZE=thread
-./build/tests/test_sync_primitives
+make clean && make SANITIZE=address,undefined
+make test
+./build/examples/manual_switch_demo   # etc. for the other examples
 ```
 
-Stack canaries are written at both ends of every task's stack at creation
-and checked on every context switch; a corrupted canary aborts with the
-offending task ID printed, rather than silently corrupting adjacent memory.
+This is what actually stood in for Valgrind and ThreadSanitizer in this
+project's environment (no Valgrind installed, and no passwordless sudo to
+add it):
+
+- **AddressSanitizer** catches the leak/overflow/use-after-free class of
+  bug Valgrind would (`test_stress.c`'s 600 create/destroy cycles are the
+  main leak-check target). ASan warns that it "doesn't fully support
+  makecontext/swapcontext" — expected, and no false positives were seen
+  in practice across many runs.
+- **ThreadSanitizer doesn't apply here.** Every "task" is a cooperative or
+  signal-preempted green thread on a single real OS thread — there's no
+  actual concurrent memory access for TSan to instrument, so a clean TSan
+  run wouldn't prove much. `test_sync_primitives.c` documents this; the
+  correctness check that actually matters (every item arrives exactly
+  once, in order, through a queue too small to avoid blocking) is done via
+  plain assertions instead.
+
+Each task's stack has a guard region written at its bottom (low-address
+end) at creation time and checked every time `scheduler_run()`'s dispatch
+loop regains control from a task — a corrupted canary aborts immediately
+with the offending task's name and ID. There's deliberately no "top"
+guard: `task_canary_ok()` explains why one doesn't work at that end of a
+downward-growing stack (`makecontext()` itself writes there before the
+task ever runs once).
+
+## Running the Cortex-M port (Phase 8)
+
+Separate toolchain, separate directory (`rtos/arm/`), not built by the
+top-level Makefile:
+
+```bash
+cd rtos/arm
+make
+renode boot.resc
+```
+
+`boot.resc` loads the ELF onto Renode's bundled `stm32f4_discovery`
+platform and opens a UART analyzer window showing `[task A] tick` /
+`[task B] tick` alternating every ~111ms, switched by a real
+`SysTick`-triggered `PendSV_Handler` instead of `SIGALRM`/`swapcontext()`.
+In headless (`--console`) mode the same output prints straight to
+Renode's own log instead of a window. See `rtos/arm/README.md` for what's
+different from the host-native kernel, and `docs/design.md` for two bugs
+that only showed up under real hardware exception semantics.
 
 ## Project structure
 
 ```
 rtos/
   src/
-    task.c / task.h        # task struct, task_create, context_switch
-    scheduler.c / .h       # ready queue, scheduler_run, preemption (SIGALRM)
-    sync.c / .h            # mutex, semaphore, message queue
-    kernel.c               # public API: task_create, task_yield, task_sleep, etc.
+    task.c / task.h        # task struct, task_create, context_switch, stack canaries
+    scheduler.c / .h       # ready queue, scheduler_run, preemption (SIGALRM), task_sleep
+    sync.c / .h            # mutex (+ priority inheritance), semaphore, message queue
+    kernel.c / kernel.h    # public API: task_spawn (create + register in one call)
   tests/
-    test_scheduling.c
-    test_priority_inversion.c
-    test_sync_primitives.c
+    test_harness.c            # fresh-scheduler-boot-per-case harness
+    test_preemption.c         # non-yielding task still gets preempted
+    test_priority_inversion.c # inversion demonstrated, then fixed
+    test_scheduling.c         # cooperative round-robin fairness
+    test_stress.c             # 600 short-lived tasks, no leaks/corruption
+    test_sync_primitives.c    # producer-consumer queue correctness
+    test_timing.c             # task_sleep() + run/ready stats
   examples/
+    manual_switch_demo.c      # Phase 1: manual context_switch(), no scheduler
     producer_consumer.c
     priority_inversion_demo.c
   docs/
-    design.md              # architecture + internals writeup
+    design.md              # architecture + internals writeup, including Phase 8 notes
+  arm/                      # Phase 8: Cortex-M4 port, boots under Renode (own README/Makefile)
   Makefile
 ```
 
@@ -136,13 +199,17 @@ rtos/
 
 | Function | What it does |
 |---|---|
-| `task_create(fn, priority, stack_size)` | Allocates a stack, sets up initial context, adds task to the ready queue |
+| `task_spawn(name, entry, arg, priority)` | Creates a task with the default stack size and registers it with the scheduler in one call — the usual way to start a task |
+| `task_create(name, entry, arg, priority, stack_size, return_ctx)` | Lower-level: allocates a stack and sets up the initial context without registering it anywhere |
 | `task_yield()` | Current task voluntarily gives up the CPU |
 | `task_sleep(ms)` | Blocks the current task until the given number of ticks has elapsed |
-| `scheduler_run()` | Starts the kernel's main loop; does not return |
-| `mutex_lock(m)` / `mutex_unlock(m)` | Blocking mutual exclusion, with optional priority inheritance |
-| `sem_wait(s)` / `sem_post(s)` | Counting semaphore operations |
-| `queue_send(q, item)` / `queue_receive(q)` | Blocking bounded message queue |
+| `scheduler_run()` | Starts the kernel's main loop; returns once every task has terminated |
+| `scheduler_enable_preemption(tick_ms, ticks_per_slice)` / `scheduler_disable_preemption()` | Starts/stops the `SIGALRM`-driven tick that forces context switches |
+| `scheduler_reset()` | Clears ready-queue bookkeeping so a test harness can boot the scheduler fresh per case |
+| `mutex_init(m, enable_priority_inheritance)`, `mutex_lock(m)` / `mutex_unlock(m)` | Blocking mutual exclusion, with optional priority inheritance |
+| `sem_init(s, initial_count)`, `sem_wait(s)` / `sem_post(s)` | Counting semaphore operations |
+| `queue_init(q, buffer, capacity)`, `queue_send(q, item)` / `queue_receive(q)` | Blocking bounded message queue |
+| `task_canary_ok(task)` | Checks a task's stack guard region; used internally on every dispatch |
 
 Full parameter details, return codes, and internal data structures are in
 `docs/design.md`.
@@ -159,7 +226,7 @@ milestone rather than a big-bang implementation:
 - [x] Phase 5 — Synchronization primitives (mutex, semaphore, queue)
 - [x] Phase 6 — Timing and delays (`task_sleep`)
 - [x] Phase 7 — Testing and hardening (fuzzing, stack canaries)
-- [x] Phase 8 (stretch) — Port to real Cortex-M target under Renode/QEMU
+- [x] Phase 8 (stretch) — Cortex-M4 port, boots under Renode
 
 ## Troubleshooting
 
@@ -169,9 +236,17 @@ milestone rather than a big-bang implementation:
 - **Random crashes only under high task counts:** almost always a stack
   size that's too small for a given task — increase the `stack_size`
   argument to `task_create()` and re-check canaries.
-- **`ucontext.h` warnings on macOS:** expected; the functions are
-  deprecated but still present and functional. No action needed unless
-  targeting a platform where they're removed entirely.
+- **A test hangs intermittently under active preemption:** if you add a
+  task that calls `task_yield()` in a very tight loop while
+  `scheduler_enable_preemption()` is active, see the note above
+  `block_alarm()` in `scheduler.c` — this narrows a real race but doesn't
+  provably close it. Existing tests avoid the pattern; new ones should too
+  (or should rely on preemption alone, without also yielding).
+- **Editing `rtos/arm/main.c` reintroduces a Renode hang:** a
+  refactor-only change (renaming a helper, dropping a print) reproduced a
+  `PendSV`/`SysTick`-pending-but-never-serviced hang during development,
+  for reasons not fully root-caused — see the Phase 8 section of
+  `docs/design.md` before restructuring it.
 
 See `docs/design.md` for a deeper architecture reference and rationale
 behind each design decision (why `ucontext.h` over `setjmp`/`longjmp`, how
