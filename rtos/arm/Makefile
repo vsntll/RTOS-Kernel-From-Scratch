@@ -42,35 +42,55 @@ clean:
 # duplicating them here. Kept entirely separate from the `all`/$(ELF)
 # rules above so the existing, already-verified Phase 8 build is
 # untouched. ----
+#
+# NODE_ID (Phase 10, default 0): threaded into ros2_demo.c as -DNODE_ID=N,
+# which parametrizes that file's client_key/participant/topic names so N
+# separately-built firmware images are N distinct ROS2 nodes rather than N
+# copies of one node. Object/ELF/BIN paths are namespaced by NODE_ID too
+# so `make ros2_demo NODE_ID=1` and `make ros2_demo NODE_ID=2` don't
+# clobber each other's build output -- host/run_multi_node.sh drives this
+# for several NODE_ID values in a row.
+#
+# SECURE_LINK (Phase 11, default 0): threaded in as -DSECURE_LINK=1,
+# switches ros2_demo.c to HMAC-authenticate every frame it sends/receives
+# (xrce/src/secure_transport.c) instead of talking raw XRCE-DDS directly.
+# Default 0 keeps `make ros2_demo` wire-identical to every earlier phase,
+# still safe to point straight at a real `MicroXRCEAgent`; SECURE_LINK=1
+# firmware must instead be pointed at host/secure_gateway.c, which
+# verifies/strips the authentication and forwards plain XRCE-DDS to an
+# unmodified agent -- see xrce/docs/design.md's Phase 11 section for why
+# the agent itself is never taught about this layer.
+NODE_ID       ?= 0
+SECURE_LINK   ?= 0
 XRCE_DIR      := ../../xrce
-ROS2_CFLAGS   := $(CFLAGS) -I$(XRCE_DIR)/include
+ROS2_CFLAGS   := $(CFLAGS) -I$(XRCE_DIR)/include -DNODE_ID=$(NODE_ID) -DSECURE_LINK=$(SECURE_LINK)
 ROS2_APP_SRCS := kernel_arm.c uart.c libc_shim.c ros2_demo.c
-ROS2_XRCE_SRCS := serial_transport.c cdr.c msgs.c session.c
-ROS2_OBJS     := $(patsubst %.c,$(BUILD_DIR)/ros2/%.o,$(ROS2_APP_SRCS)) \
-                 $(patsubst %.c,$(BUILD_DIR)/ros2/%.o,$(ROS2_XRCE_SRCS)) \
-                 $(BUILD_DIR)/startup.o $(BUILD_DIR)/context_switch.o
+ROS2_XRCE_SRCS := serial_transport.c cdr.c msgs.c session.c sha256.c hmac.c secure_transport.c
+ifeq ($(SECURE_LINK),0)
+SEC_SUFFIX :=
+else
+SEC_SUFFIX := _sec$(SECURE_LINK)
+endif
+ROS2_BUILD_DIR := $(BUILD_DIR)/ros2/node$(NODE_ID)$(SEC_SUFFIX)
+ROS2_OBJS     := $(patsubst %.c,$(ROS2_BUILD_DIR)/%.o,$(ROS2_APP_SRCS)) \
+                 $(patsubst %.c,$(ROS2_BUILD_DIR)/%.o,$(ROS2_XRCE_SRCS)) \
+                 $(ROS2_BUILD_DIR)/startup.o $(ROS2_BUILD_DIR)/context_switch.o
 
-ROS2_ELF := $(BUILD_DIR)/ros2_demo.elf
-ROS2_BIN := $(BUILD_DIR)/ros2_demo.bin
+ROS2_ELF := $(BUILD_DIR)/ros2_demo_node$(NODE_ID)$(SEC_SUFFIX).elf
+ROS2_BIN := $(BUILD_DIR)/ros2_demo_node$(NODE_ID)$(SEC_SUFFIX).bin
 
-$(BUILD_DIR)/ros2/%.o: %.c | $(BUILD_DIR)
-	@mkdir -p $(BUILD_DIR)/ros2
+$(ROS2_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(ROS2_BUILD_DIR)
 	$(CC) $(ROS2_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ros2/serial_transport.o: $(XRCE_DIR)/src/serial_transport.c | $(BUILD_DIR)
-	@mkdir -p $(BUILD_DIR)/ros2
-	$(CC) $(ROS2_CFLAGS) -c $< -o $@
+$(ROS2_BUILD_DIR)/%.o: %.s | $(BUILD_DIR)
+	@mkdir -p $(ROS2_BUILD_DIR)
+	$(AS) $(CPU_FLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ros2/cdr.o: $(XRCE_DIR)/src/cdr.c | $(BUILD_DIR)
-	@mkdir -p $(BUILD_DIR)/ros2
-	$(CC) $(ROS2_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ros2/msgs.o: $(XRCE_DIR)/src/msgs.c | $(BUILD_DIR)
-	@mkdir -p $(BUILD_DIR)/ros2
-	$(CC) $(ROS2_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ros2/session.o: $(XRCE_DIR)/src/session.c | $(BUILD_DIR)
-	@mkdir -p $(BUILD_DIR)/ros2
+# All of ROS2_XRCE_SRCS live in $(XRCE_DIR)/src -- one pattern rule for
+# all of them rather than one static rule per file.
+$(ROS2_BUILD_DIR)/%.o: $(XRCE_DIR)/src/%.c | $(BUILD_DIR)
+	@mkdir -p $(ROS2_BUILD_DIR)
 	$(CC) $(ROS2_CFLAGS) -c $< -o $@
 
 $(ROS2_ELF): $(ROS2_OBJS)
