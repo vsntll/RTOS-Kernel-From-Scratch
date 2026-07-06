@@ -159,7 +159,7 @@ milestone rather than a big-bang implementation:
 - [x] Phase 5 — Synchronization primitives (mutex, semaphore, queue)
 - [x] Phase 6 — Timing and delays (`task_sleep`)
 - [x] Phase 7 — Testing and hardening (fuzzing, stack canaries)
-- [ ] Phase 8 (stretch) — Port to real Cortex-M target under Renode/QEMU
+- [x] Phase 8 (stretch) — Port to real Cortex-M target under Renode/QEMU
 
 ## Troubleshooting
 
