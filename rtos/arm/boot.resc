@@ -1,0 +1,12 @@
+:name: RTOS Phase 8 Cortex-M demo
+
+using sysbus
+
+mach create "rtos-arm"
+machine LoadPlatformDescription @platforms/boards/stm32f4_discovery.repl
+
+showAnalyzer sysbus.usart2
+
+sysbus LoadELF $ORIGIN/build/kernel.elf
+
+start
