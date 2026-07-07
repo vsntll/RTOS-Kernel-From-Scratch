@@ -1036,6 +1036,165 @@ Status: implemented and verified live -- 3 simultaneous QEMU boards, one
 real unmodified agent process, independently-flowing data confirmed in
 both directions, zero cross-node leakage observed.
 
+## Phase 11 — Security: HMAC-authenticated link
+
+Every previous phase's firmware sends completely unauthenticated
+XRCE-DDS frames -- indistinguishable, from the wire's perspective, from a
+bare micro-ROS board with no security posture at all. This phase adds
+real cryptographic authentication to the actual link, without touching
+the XRCE-DDS wire protocol the real agent speaks.
+
+**Why the agent can never be the direct far end of the authenticated
+link.** Option A's entire value proposition is zero-modification interop
+with a real, unmodified `MicroXRCEAgent`. That agent has no concept of
+this project's authentication envelope and never will (modifying it would
+violate Option A itself). So the authenticated hop can only exist between
+two things this project controls: the firmware, and a new gateway
+process. The gateway then speaks completely plain, standard XRCE-DDS
+serial framing on to the real agent, unmodified from Phase 1 onward. This
+mirrors a real industrial/automotive pattern -- authenticate the field
+bus/ECU link; a trusted gateway is the actual boundary to the backend --
+not a workaround specific to this project.
+
+```
+firmware (QEMU) <--HMAC-authenticated--> host/secure_gateway.c <--plain XRCE-DDS--> real MicroXRCEAgent
+```
+
+**Cryptographic primitives, built from scratch and ground-truthed against
+published specs/vectors, same policy as every other protocol piece in
+this repo:**
+- `xrce/src/sha256.c` (FIPS 180-4): streaming init/update/final API.
+  Checked against NIST's own published example digests -- the empty
+  string, the one-block `"abc"` vector, the two-block vector, and the
+  one-million-repetitions-of-`'a'` long-message vector (exercises padding
+  across many block boundaries, not just one or two) -- independently
+  cross-verified against Python's `hashlib.sha256` before being hardcoded
+  into `xrce/tests/test_sha256.c`, not typed from memory (a first attempt
+  at the empty-string vector was off by one hex digit; caught this way,
+  not by luck).
+- `xrce/src/hmac.c` (RFC 2104 / FIPS 198-1), built on the SHA-256
+  primitive. Checked against RFC 4231's official HMAC-SHA256 test cases:
+  Test Case 1 (20-byte key), Test Case 2 (`"Jefe"`, the RFC's own
+  deliberately-short-key example), and Test Case 6 (a 131-byte key,
+  longer than SHA-256's 64-byte block, exercising the "hash the key down
+  first" branch RFC 2104 requires for over-long keys) --
+  `xrce/tests/test_hmac.c`. A first pass at Test Case 2 failed; the bug
+  was in the *test* (a hardcoded data length of 29 instead of the actual
+  28-character string length), not the implementation -- fixed by
+  switching to `strlen()` instead of a second hardcoded literal, closing
+  off that whole class of error.
+
+**The authenticated envelope** (`xrce/include/xrce/secure_transport.h`,
+`xrce/src/secure_transport.c`) wraps an inner XRCE payload as:
+
+```
+counter (4 bytes, big-endian) | tag (8 bytes) | inner payload (N bytes)
+```
+
+`tag` is HMAC-SHA256(key, counter || inner payload), truncated to 8
+bytes -- a real, common tradeoff (AUTOSAR SecOC uses similarly truncated
+MACs), not weaker cryptography invented for this project: it trades
+forgery resistance from 2^-256 down to a still-substantial 2^-64 in
+exchange for much smaller per-frame overhead, appropriate given the
+threat being defended against (message injection/tampering over a link)
+rather than a nation-state adversary. `counter` is a strictly-increasing
+per-sender sequence number; a receiver rejects any frame whose counter is
+<= the highest one already accepted (`XRCE_SECURE_REPLAYED`), independent
+of whether its tag is otherwise valid. Each direction (firmware->gateway
+"uplink", gateway->firmware "downlink") gets its own `xrce_secure_ctx_t`
+and its own counter sequence.
+
+This composes with `xrce/src/serial_transport.c` rather than modifying
+it: the wrapped `counter|tag|payload` blob is simply what gets handed to
+`xrce_serial_frame_encode()` as *its* payload, so the outer framing
+(flag/addr/len byte-stuffing, CRC-16/ARC) is exactly Phase 1's, unchanged
+and reused as-is on both sides of the gateway.
+
+**Firmware integration** (`rtos/arm/ros2_demo.c`): gated behind a
+`SECURE_LINK` build flag (`rtos/arm/Makefile`, default 0, threaded in as
+`-DSECURE_LINK=$(SECURE_LINK)`) exactly like Phase 10's `NODE_ID` --
+`make ros2_demo` with no flags is wire-identical to every earlier phase
+and still safe to point straight at a real agent; `SECURE_LINK=1` wraps
+every outgoing frame (`send_frame()`) via `xrce_secure_wrap()` and
+verifies every incoming one (`pace_and_poll_rx()`) via
+`xrce_secure_unwrap()` before handing it to
+`handle_incoming_frame()`, printing `REJECTED downlink frame (auth
+failed)` over UART and dropping it on failure rather than acting on
+unverified bytes. A 16-byte demo pre-shared key is hardcoded in both
+`ros2_demo.c` and `host/secure_gateway.c`'s defaults -- stated plainly as
+a demo simplification (a real deployment provisions this out of band, at
+manufacture time, not at runtime), the same honesty this project already
+applies to the fixed demo `client_key` bytes.
+
+**`host/secure_gateway.c`**: opens the QEMU-allocated board pty directly
+(the same path the README's manual single-node walkthrough would
+otherwise hand straight to `MicroXRCEAgent serial -D`), creates its own
+second pty pair via `openpty()`, and relays both directions with a
+`poll()` loop -- verifying/stripping on the uplink, wrapping on the
+downlink -- printing `AGENT_PTY:/dev/pts/M` for a real,
+completely-unmodified `MicroXRCEAgent serial -D /dev/pts/M` to attach to,
+same as always. Every accepted and rejected frame is logged with a
+reason, which is what makes the wrong-key demo below observable rather
+than just "silently correct". One real gotcha found the same way Phase 9
+found its pty issue -- by testing, not assuming: a freshly-opened pty
+slave defaults to canonical/cooked mode (echo, line buffering), which
+would corrupt this project's binary framing exactly like
+`host/pty_bridge.py`'s header comment already documents for a different
+tool; `secure_gateway.c` calls `cfmakeraw()`/`tcsetattr()` on both the
+board pty (now that this program, not the agent, is its direct opener)
+and its own newly-created agent-facing pty slave before use.
+
+**Verified live end to end, both the happy path and the actual security
+property:**
+- **Legitimate traffic, unaffected in substance:** with `SECURE_LINK=1`
+  firmware, `secure_gateway.c` given the matching key, and a real
+  unmodified `MicroXRCEAgent serial` pointed at the gateway's printed
+  `AGENT_PTY`, `ros2 topic list` shows the same `/chatter`, `/setpoint`,
+  `/pong` as every earlier phase; `ros2 topic echo /chatter --once`
+  returns real incrementing data; `ros2 topic pub /setpoint ... {data:
+  777}` produces `data: 777` on `/pong` -- the exact same round trip
+  Phase 6's latency benchmark depends on, now flowing through an
+  authenticated hop the earlier phases didn't have, with zero behavior
+  change visible to the ROS2 side.
+- **Wrong key rejected, proven live, not just asserted:** restarting the
+  same pipeline with `secure_gateway` given a deliberately different key
+  (firmware unchanged, still using its real key) produced **zero** of the
+  firmware's topics in `ros2 topic list` -- only the agent's own baseline
+  `/parameter_events`/`/rosout` -- with the gateway's log showing
+  `REJECTED frame (bad tag (corrupted in transit, or wrong key))` for
+  every single uplink frame. Nothing the firmware ever sent reached the
+  ROS2 graph at all.
+- Tamper (flipped payload/tag bytes) and replay (a valid frame delivered
+  twice) rejection are covered exhaustively in
+  `xrce/tests/test_secure_transport.c` at the unit level -- 7 cases,
+  including both a tampered-payload and a tampered-tag-directly variant,
+  and a replay case proving the *second* delivery of an otherwise
+  perfectly valid frame is rejected specifically by the counter-freshness
+  check, not the HMAC. This is the same "corruption testing belongs at
+  the unit level, not by physically corrupting a live QEMU serial stream"
+  precedent `test_serial_transport.c` already set in Phase 1 -- live
+  end-to-end testing covers the happy path and the wrong-key case, which
+  are the two properties that specifically require the real gateway/agent
+  plumbing to observe.
+
+**Known limitations, stated plainly:**
+- No confidentiality -- payloads are authenticated, not encrypted. A
+  real DTLS-lite layer would add this; explicitly scoped out of this
+  phase (HMAC was the "at minimum" bar from the project brief; DTLS-lite
+  was the stated stretch goal, not pursued here to keep this phase's
+  actual deliverable -- authentication -- solid rather than spreading
+  effort across an additional encryption layer too).
+- No runtime key exchange/rotation -- the pre-shared key is a compile-time
+  constant in firmware and a CLI default in the gateway, matching how a
+  real embedded device's initial key is typically provisioned at
+  manufacture time rather than negotiated at runtime, but there is no
+  mechanism here to rotate it without rebuilding/redeploying both ends.
+- The truncated 8-byte tag is a deliberate size/security tradeoff (see
+  above), not full-strength HMAC-SHA256 forgery resistance.
+- `host/udp_loss_proxy.py` (Phase 7c) is untouched by this phase -- the
+  secure link uses the serial/pty path, not UDP, so there was no need to
+  add authentication to that tool.
+
 ## Later phases
 
 Every planned phase (1-12) has now landed. Future work, if any, gets
