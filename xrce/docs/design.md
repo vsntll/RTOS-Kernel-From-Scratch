@@ -1195,6 +1195,118 @@ property:**
   secure link uses the serial/pty path, not UDP, so there was no need to
   add authentication to that tool.
 
+## Phase 12 — Fault injection test suite
+
+Earlier phases already found real fault-tolerance properties -- but as
+side effects of chasing other bugs, not as a deliberate suite: Phase 1's
+`test_serial_transport.c` corruption/resync unit tests, Phase 6's ad hoc
+observation that killing QEMU mid-session leaves the agent unharmed
+(recorded in that phase's section above), Phase 7c's induced packet loss
+for QoS measurement. This phase turns the three fault categories a real
+deployment actually needs proof against into a real, repeatable,
+assertion-based suite -- the same discipline `rtos/tests/`'s own
+regression harness already applies to the kernel, carried into this
+layer.
+
+**Category 1: link killed mid-transaction (`host/fault_link_kill.sh`).**
+Fully automated, 4 pass/fail checks, no manual observation:
+1. Baseline: confirms `/chatter` has real live data before touching
+   anything.
+2. Kills the agent process with `SIGKILL` (no chance to clean up)
+   mid-session; confirms the firmware (QEMU) is still running afterward.
+3. Starts a *fresh* agent process pointed at the *same still-running*
+   firmware -- no firmware restart, no code change -- and polls for up to
+   60 seconds for `/chatter` to resume. This is `ros2_demo.c`'s periodic
+   re-announce (built in Phase 5 specifically to survive the boot-timing
+   race between firmware and a late-attaching agent) doing its actual job
+   under a real kill/restart, not just the boot-time race it was
+   originally built for.
+4. Kills the firmware (QEMU) with `SIGKILL` mid-session; confirms the
+   agent process is still running afterward (the reverse of Phase 6's
+   original ad hoc finding, now asserted rather than eyeballed).
+
+**Verified live: all 4 passed.** Full run output:
+```
+PASS: baseline: live data flowing before any fault (data=<N>)
+PASS: firmware (QEMU) survives agent being killed mid-session
+PASS: automatic recovery after agent restart, no firmware intervention (data=<M>)
+PASS: agent survives firmware being killed mid-session
+
+4 passed, 0 failed
+```
+
+**Category 2: systematic packet corruption under live load
+(`host/fault_corruption_proxy.py`).** A byte-corrupting relay sitting on
+the real QEMU<->agent serial link -- structurally the dumbest possible
+proxy (no frame-boundary awareness at all, unlike `host/secure_gateway.c`;
+it just flips a random bit in a random subset of bytes as they cross it
+in either direction), because the property under test is what a real
+noisy physical link does, not something this project's own code should
+be trusted to simulate faithfully. This proves *live*, against a real
+unmodified agent, over a continuous run, what
+`test_serial_transport.c`'s corruption/resync cases already prove by
+feeding the state machine directly: that CRC-16/ARC catches corruption
+and `xrce_serial_reader_feed()` resyncs cleanly instead of wedging.
+
+Two corruption rates tested, both against the real serial pipeline:
+- **0.3% per byte:** full CREATE_CLIENT->participant->topic->publisher->
+  datawriter chain completed and stayed up; `ros2 topic echo /chatter`
+  read twice, 5 seconds apart, showed `data: 2171` then `data: 2592` --
+  genuinely incrementing, i.e. real ongoing delivery, not a stale cached
+  value -- while the proxy's own counters showed corruption continuing
+  throughout (hundreds of bytes actually flipped by that point).
+- **2% per byte:** roughly `0.98^100 ≈ 13%` chance any single ~100-byte
+  CREATE frame survives completely uncorrupted, so the full multi-step
+  entity chain (which restarts from `CREATE_CLIENT` on every periodic
+  re-announce, per Phase 5) took longer than a 90-second test window to
+  fully complete -- but critically, across that entire window: no crash,
+  no hang, byte counters climbed steadily and continuously in both
+  directions, and the agent's own log showed real incremental progress
+  (a participant was successfully created partway through). Slower under
+  heavier corruption, not broken by it -- exactly what "degrades
+  gracefully" should mean, stated honestly rather than only reporting the
+  rate that produced a clean full-success number.
+
+**Category 3: a task crashing mid-publish, tied to Phase 8's diagnostics
+(`host/live_fault_demo.c`).** The one fault category from the project
+brief that's about the RTOS itself, not the network link. Reuses Phase
+8's exact diagnostics harness (same task-status/scheduler-status/
+queue-status builders, same `/rtos/diagnostics` topic and refresh
+service) with one added task, `faulty_worker`, that runs
+`FAULTY_ITERATIONS_BEFORE_CRASH` (5) genuinely healthy iterations --
+indistinguishable from a normal worker up to that point, which is the
+point: a real bug looks exactly like this right up until it doesn't --
+then deliberately overwrites its own stack canary bytes, simulating a
+real overflow bug in application code rather than a contrived test hook.
+
+Stated precisely, because it would be easy to overclaim here: this
+project's stack canary (`rtos/src/task.c`'s
+`task_check_canary_or_abort()`, checked on *every* context switch per
+`scheduler.c`) is a **fail-safe**, not fail-silent, design -- on
+corruption, the *entire process* halts immediately with a clear
+diagnostic. That is a real and legitimate answer to "prove your system
+degrades gracefully" (corrupted state is caught and the system stops
+before it can act on it, instead of continuing with undefined behavior),
+but it is specifically **not** "other tasks keep running while one
+crashes" -- this demo does not show that, and doesn't claim to.
+
+**Verified live, exactly as designed:**
+```
+[faulty_worker] iteration 5: deliberately corrupting my own stack canary now (simulated overflow bug) -- next task_sleep() will trip the abort
+FATAL: stack canary corrupted for task 'faulty' (id=1) -- stack overflow
+```
+process exits immediately after. The graceful part that *is* real and
+verified: `ros2 topic echo /rtos/diagnostics --once`, run immediately
+after, returned the last snapshot published before the halt --
+completely coherent, not corrupted or partial: real, distinct
+`stack_high_water_mark_bytes` for both tasks, real `tick_count`/
+`context_switch_count` values (`200`/`32`), and the work queue correctly
+reported at `depth 3/4` with `level` correctly elevated to `WARN` (this
+project's own `add_queue_status()` logic, unaffected by the crash).
+Nothing corrupted ever reached the ROS2 side, and -- because the process
+is gone -- no further updates ever arrive, an observable "flatline"
+rather than a stream of garbage.
+
 ## Later phases
 
 Every planned phase (1-12) has now landed. Future work, if any, gets
