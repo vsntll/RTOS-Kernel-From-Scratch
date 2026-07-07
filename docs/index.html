@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RTOS Kernel From Scratch</title>
+<meta name="description" content="A preemptive, priority-based RTOS kernel written in C from first principles — scheduler, context switch, priority-inheriting mutex, and a real Cortex-M4 port." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2312161f'/%3E%3Crect x='6' y='14' width='6' height='6' fill='%23dc9a3f'/%3E%3Crect x='14' y='8' width='6' height='6' fill='%235fada3'/%3E%3Crect x='22' y='18' width='4' height='4' fill='%23dc9a3f'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ground: #eef1f5;
+    --surface: #ffffff;
+    --surface-2: #e6eaf0;
+    --ink: #161b24;
+    --ink-dim: #545f70;
+    --ink-faint: #8891a0;
+    --accent: #b9722a;
+    --accent-ink: #ffffff;
+    --accent-2: #2f8f85;
+    --line: #cdd4de;
+    --line-strong: #adb6c4;
+    --grid-line: rgba(90, 100, 120, 0.09);
+    --shadow: 0 1px 0 rgba(20, 24, 32, 0.04);
+    --code-bg: #1a2029;
+    --code-ink: #eae7de;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #12161f;
+      --surface: #171d28;
+      --surface-2: #1c2330;
+      --ink: #eae7de;
+      --ink-dim: #a3aabb;
+      --ink-faint: #6c7686;
+      --accent: #dc9a3f;
+      --accent-ink: #14100a;
+      --accent-2: #5fada3;
+      --line: #2a3142;
+      --line-strong: #3a4358;
+      --grid-line: rgba(200, 210, 230, 0.05);
+      --shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+      --code-bg: #0d1117;
+      --code-ink: #e6e2d6;
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #12161f;
+    --surface: #171d28;
+    --surface-2: #1c2330;
+    --ink: #eae7de;
+    --ink-dim: #a3aabb;
+    --ink-faint: #6c7686;
+    --accent: #dc9a3f;
+    --accent-ink: #14100a;
+    --accent-2: #5fada3;
+    --line: #2a3142;
+    --line-strong: #3a4358;
+    --grid-line: rgba(200, 210, 230, 0.05);
+    --shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
+    --code-bg: #0d1117;
+    --code-ink: #e6e2d6;
+    color-scheme: dark;
+  }
+
+  :root[data-theme="light"] {
+    --ground: #eef1f5;
+    --surface: #ffffff;
+    --surface-2: #e6eaf0;
+    --ink: #161b24;
+    --ink-dim: #545f70;
+    --ink-faint: #8891a0;
+    --accent: #b9722a;
+    --accent-ink: #ffffff;
+    --accent-2: #2f8f85;
+    --line: #cdd4de;
+    --line-strong: #adb6c4;
+    --grid-line: rgba(90, 100, 120, 0.09);
+    --shadow: 0 1px 0 rgba(20, 24, 32, 0.04);
+    --code-bg: #1a2029;
+    --code-ink: #eae7de;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background:
+      linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 100% 32px,
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 32px 100%,
+      var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .mono { font-family: "IBM Plex Mono", ui-monospace, "Cascadia Code", monospace; }
+
+  .label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .wrap {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    backdrop-filter: blur(8px);
+    background: color-mix(in srgb, var(--ground) 82%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-inner {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    font-size: 0.92rem;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .brand-mark {
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
+    flex: none;
+  }
+  .topbar nav {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.82rem;
+  }
+  .topbar nav a { color: var(--ink-dim); text-decoration: none; }
+  .topbar nav a:hover { color: var(--accent); }
+  .theme-toggle {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    background: transparent;
+    color: var(--ink-dim);
+    border: 1px solid var(--line-strong);
+    padding: 5px 10px;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 64px 0 40px; }
+  .hero .label { color: var(--accent-2); }
+  h1 {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 700;
+    font-size: clamp(2rem, 5vw, 3.1rem);
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    margin: 10px 0 18px;
+    text-wrap: balance;
+  }
+  h1 span { color: var(--accent); }
+  .dek {
+    max-width: 62ch;
+    color: var(--ink-dim);
+    font-size: 1.08rem;
+    line-height: 1.65;
+    margin: 0 0 30px;
+  }
+  .dek code, p code, li code, td code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.88em;
+    background: var(--surface-2);
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+    color: var(--ink);
+  }
+  .cta-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .btn {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.85rem;
+    text-decoration: none;
+    padding: 10px 16px;
+    border: 1px solid var(--line-strong);
+    color: var(--ink);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 2px;
+  }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary:hover { color: var(--accent-ink); filter: brightness(1.08); }
+
+  /* ---------- timing diagram (hero centerpiece) ---------- */
+  .scope {
+    margin-top: 44px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    padding: 20px 22px 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .scope-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 16px;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  .scope-head .fig { font-size: 0.72rem; letter-spacing: 0.1em; color: var(--ink-faint); text-transform: uppercase; }
+  .scope-head .caption { font-size: 0.78rem; color: var(--ink-dim); }
+  .track-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .track-name { width: 58px; flex: none; font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; color: var(--ink-dim); }
+  .track {
+    position: relative;
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 2px;
+    height: 26px;
+  }
+  .seg { border-radius: 1px; position: relative; }
+  .seg.running { background: var(--accent); }
+  .seg.ready {
+    background: transparent;
+    border: 1px dashed var(--line-strong);
+  }
+  .seg.blocked {
+    background: repeating-linear-gradient(135deg, var(--line-strong) 0, var(--line-strong) 1px, transparent 1px, transparent 6px);
+    opacity: 0.6;
+  }
+  .axis { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; margin: 6px 0 0 70px; }
+  .axis span { font-family: "IBM Plex Mono", monospace; font-size: 0.62rem; color: var(--ink-faint); text-align: center; }
+  .tickmark {
+    position: absolute;
+    top: 30px;
+    bottom: 6px;
+    width: 1px;
+    background: var(--accent-2);
+    opacity: 0.55;
+  }
+  .tickmark::after {
+    content: attr(data-label);
+    position: absolute;
+    top: -14px;
+    left: 4px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.62rem;
+    color: var(--accent-2);
+    white-space: nowrap;
+  }
+  .playhead {
+    position: absolute;
+    top: 16px;
+    bottom: 6px;
+    left: 70px;
+    width: 1px;
+    background: var(--ink);
+    opacity: 0.9;
+    animation: sweep 7s ease-in-out infinite;
+  }
+  @keyframes sweep {
+    0% { left: 70px; opacity: 0; }
+    5% { opacity: 0.85; }
+    92% { opacity: 0.85; }
+    100% { left: calc(100% - 6px); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .playhead { animation: none; display: none; }
+  }
+  .legend { display: flex; gap: 18px; margin-top: 16px; flex-wrap: wrap; font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; color: var(--ink-dim); }
+  .legend .sw { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 12px; height: 12px; display: inline-block; border-radius: 1px; }
+  .legend i.running { background: var(--accent); }
+  .legend i.ready { border: 1px dashed var(--line-strong); }
+  .legend i.blocked { background: repeating-linear-gradient(135deg, var(--line-strong) 0, var(--line-strong) 1px, transparent 1px, transparent 4px); opacity: 0.6; }
+
+  /* ---------- sections ---------- */
+  section { padding: 52px 0; border-top: 1px solid var(--line); }
+  section.no-rule { border-top: none; }
+  .section-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 22px; }
+  .section-head .num { font-family: "IBM Plex Mono", monospace; color: var(--ink-faint); font-size: 0.85rem; }
+  h2 {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+  p { color: var(--ink-dim); max-width: 68ch; }
+  .lede { color: var(--ink); font-size: 1.02rem; max-width: 66ch; }
+
+  .diagram {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.86rem;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 22px 24px;
+    overflow-x: auto;
+    line-height: 1.7;
+    border: 1px solid var(--line);
+  }
+  .diagram .dim { color: #8b93a3; }
+  .diagram .warm { color: #dc9a3f; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 8px; }
+  .grid-2 > div { background: var(--surface); padding: 18px 20px; }
+  .grid-2 .col-head { font-family: "IBM Plex Mono", monospace; font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-2); margin-bottom: 10px; }
+  .grid-2 ul { margin: 0; padding-left: 18px; color: var(--ink-dim); font-size: 0.92rem; }
+  .grid-2 li { margin-bottom: 8px; }
+  .grid-2 li code { font-size: 0.85em; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.92rem; }
+  caption { text-align: left; margin-bottom: 8px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); font-weight: 500; }
+  td.fn code { font-size: 0.86em; white-space: nowrap; }
+  td { color: var(--ink-dim); }
+  .table-scroll { overflow-x: auto; }
+
+  .phases { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); background: var(--surface); }
+  .phase {
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .phase:last-child { border-bottom: none; }
+  .phase .n { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-weight: 600; font-size: 0.85rem; width: 26px; flex: none; }
+  .phase .t { font-weight: 500; color: var(--ink); }
+  .phase .d { color: var(--ink-dim); font-size: 0.88rem; margin-left: auto; text-align: right; max-width: 40ch; }
+  .phase.stretch .n { color: var(--accent-2); }
+
+  .tests { list-style: none; margin: 0; padding: 0; counter-reset: t; }
+  .test {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .test:last-child { border-bottom: none; }
+  .test::before { counter-increment: t; content: counter(t, decimal-leading-zero); font-family: "IBM Plex Mono", monospace; color: var(--ink-faint); font-size: 0.82rem; padding-top: 1px; }
+  .test .name { font-family: "IBM Plex Mono", monospace; font-size: 0.9rem; color: var(--ink); margin-bottom: 2px; }
+  .test .desc { color: var(--ink-dim); font-size: 0.9rem; }
+
+  .notes { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 8px; }
+  .note { background: var(--surface); padding: 18px 20px; }
+  .note .tag { font-family: "IBM Plex Mono", monospace; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+  .note p { margin: 0; font-size: 0.92rem; color: var(--ink-dim); max-width: none; }
+
+  .callout {
+    border-left: 2px solid var(--accent-2);
+    padding: 4px 0 4px 18px;
+    margin: 20px 0;
+    color: var(--ink-dim);
+    font-size: 0.94rem;
+  }
+
+  code.block, pre {
+    display: block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.84rem;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 14px 16px;
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    line-height: 1.6;
+  }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 40px 0 60px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.8rem;
+    color: var(--ink-faint);
+  }
+  footer .links { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+  footer a { color: var(--ink-dim); text-decoration: none; }
+  footer a:hover { color: var(--accent); }
+
+  @media (max-width: 720px) {
+    .grid-2 { grid-template-columns: 1fr; }
+    .phase { flex-wrap: wrap; }
+    .phase .d { margin-left: 0; text-align: left; max-width: none; }
+    .topbar nav { display: none; }
+    .track-name { width: 40px; font-size: 0.68rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#top"><span class="brand-mark"></span>rtos-kernel-from-scratch</a>
+    <nav>
+      <a href="#architecture">architecture</a>
+      <a href="#roadmap">roadmap</a>
+      <a href="#api">api</a>
+      <a href="#validation">validation</a>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme">MODE: AUTO</button>
+    </nav>
+  </div>
+</div>
+
+<div id="top" class="wrap hero">
+  <div class="label">C · POSIX HOST-NATIVE + CORTEX-M4 · NO RTOS DEPENDENCIES</div>
+  <h1>A real-time kernel,<br /><span>built from first principles.</span></h1>
+  <p class="dek">
+    Most embedded engineers <em>use</em> FreeRTOS without ever implementing a scheduler,
+    a context switch, or a priority-inheriting mutex themselves. This is that implementation —
+    task structs and stacks, cooperative and preemptive scheduling, priority inversion and the
+    fix for it, and blocking synchronization primitives — built up in eight testable phases,
+    running host-native on <code>ucontext.h</code> and, in Phase 8, on real Cortex-M4 assembly
+    under Renode.
+  </p>
+  <div class="cta-row">
+    <a class="btn primary" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch">View source →</a>
+    <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/docs/design.md">Read the design doc</a>
+    <a class="btn" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/arm/README.md">Cortex-M4 port ↗</a>
+  </div>
+
+  <div class="scope" aria-hidden="true">
+    <div class="scope-head">
+      <span class="fig">FIG. 1 — SCHEDULE TRACE (ILLUSTRATIVE)</span>
+      <span class="caption">3 tasks · tick slice = 3 · round-robin + preemption</span>
+    </div>
+
+    <div class="track-row">
+      <span class="track-name">TASK A</span>
+      <div class="track">
+        <div class="seg running" style="grid-column:1/4"></div>
+        <div class="seg ready" style="grid-column:4/7"></div>
+        <div class="seg running" style="grid-column:7/10"></div>
+        <div class="seg ready" style="grid-column:10/13"></div>
+        <div class="tickmark" style="left:50%" data-label="SIGALRM tick"></div>
+      </div>
+    </div>
+    <div class="track-row">
+      <span class="track-name">TASK B</span>
+      <div class="track">
+        <div class="seg ready" style="grid-column:1/4"></div>
+        <div class="seg running" style="grid-column:4/7"></div>
+        <div class="seg ready" style="grid-column:7/10"></div>
+        <div class="seg running" style="grid-column:10/13"></div>
+      </div>
+    </div>
+    <div class="track-row">
+      <span class="track-name">TASK C</span>
+      <div class="track">
+        <div class="seg blocked" style="grid-column:1/6"></div>
+        <div class="seg ready" style="grid-column:6/9"></div>
+        <div class="seg running" style="grid-column:9/13"></div>
+        <div class="tickmark" style="left:41.7%" data-label="mutex_unlock → wake"></div>
+      </div>
+    </div>
+    <div class="playhead"></div>
+    <div class="axis"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span></div>
+    <div class="legend">
+      <span class="sw"><i class="running"></i>RUNNING</span>
+      <span class="sw"><i class="ready"></i>READY</span>
+      <span class="sw"><i class="blocked"></i>BLOCKED (on mutex/queue/sleep)</span>
+    </div>
+  </div>
+</div>
+
+<section class="no-rule" id="why">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§1</span><h2>Why it exists</h2></div>
+    <p class="lede">
+      This project builds an RTOS kernel entirely from first principles: task structs and stacks,
+      a cooperative scheduler, preemption via timer interrupt, priority scheduling with the
+      classic inversion bug (and the priority-inheritance fix for it), and blocking synchronization
+      primitives — mutex, semaphore, message queue. Everything runs as a host-native process first:
+      no board, simulator, or cross-compiler needed. <code>docs/design.md</code> documents the
+      internal architecture in full.
+    </p>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§2</span><h2>How it runs</h2></div>
+    <p>
+      Context switching uses POSIX primitives (<code>ucontext.h</code>) in place of real hardware
+      registers, and a POSIX interval timer (<code>setitimer</code> + <code>SIGALRM</code>) stands
+      in for a hardware tick interrupt — the host-native equivalent of a SysTick ISR triggering
+      <code>PendSV</code> on a real Cortex-M part.
+    </p>
+    <div class="diagram">main() <span class="dim">--&gt;</span> scheduler_run() <span class="dim">--&gt;</span> [Task A] <span class="warm">&lt;--context_switch--&gt;</span> [Task B] <span class="dim">&lt;--&gt;</span> [Task C]
+                                    <span class="dim">|</span>
+                              <span class="warm">SIGALRM</span> <span class="dim">(tick) forces preemption</span></div>
+
+    <h3 style="margin-top:36px;">Two build targets, one design</h3>
+    <p style="margin-bottom:0;">The context-switch code is also ported to real Cortex-M4 assembly and boots under Renode (<code>rtos/arm/</code>) — deliberately a small proof that the design ports to real hardware, not a re-implementation of Phases 2–7 on top of it.</p>
+    <div class="grid-2">
+      <div>
+        <div class="col-head">Host-native — src/</div>
+        <ul>
+          <li>Context switch via <code>swapcontext()</code> (<code>task.c</code>)</li>
+          <li>Tick source: <code>setitimer</code> + <code>SIGALRM</code></li>
+          <li>Stack: <code>malloc()</code>'d buffer + <code>ucontext_t</code></li>
+          <li>Full kernel: priority-aware round robin, sync primitives, sleep, canaries</li>
+        </ul>
+      </div>
+      <div>
+        <div class="col-head">Cortex-M4 — arm/</div>
+        <ul>
+          <li>Context switch via <code>PendSV_Handler</code> (<code>context_switch.s</code>)</li>
+          <li>Tick source: real <code>SysTick</code></li>
+          <li>Stack: fixed array + hand-built exception frame (<code>kernel_arm.c</code>)</li>
+          <li>Round robin only — a minimal 2-task demo, boots under Renode</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§3</span><h2>Build phases</h2></div>
+    <p>Built incrementally — each phase is a working, testable milestone rather than a big-bang implementation. All eight are complete.</p>
+    <ul class="phases">
+      <li class="phase"><span class="n">01</span><span class="t">Task representation and context switching</span></li>
+      <li class="phase"><span class="n">02</span><span class="t">Cooperative scheduler</span></li>
+      <li class="phase"><span class="n">03</span><span class="t">Preemption via timer interrupt</span></li>
+      <li class="phase"><span class="n">04</span><span class="t">Priority scheduling + priority inversion fix</span></li>
+      <li class="phase"><span class="n">05</span><span class="t">Synchronization primitives</span><span class="d">mutex, semaphore, message queue</span></li>
+      <li class="phase"><span class="n">06</span><span class="t">Timing and delays</span><span class="d"><code>task_sleep()</code></span></li>
+      <li class="phase"><span class="n">07</span><span class="t">Testing and hardening</span><span class="d">fuzzing, stack canaries</span></li>
+      <li class="phase stretch"><span class="n">08</span><span class="t">Cortex-M4 port (stretch)</span><span class="d">boots under Renode</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="api">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§4</span><h2>Kernel API</h2></div>
+    <p>The public surface, in full — everything else in <code>src/</code> is internal to the scheduler and sync primitives.</p>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Function</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td class="fn"><code>task_spawn(name, entry, arg, priority)</code></td><td>Creates a task with the default stack size and registers it with the scheduler in one call — the usual way to start a task</td></tr>
+        <tr><td class="fn"><code>task_create(name, entry, arg, priority, stack_size, return_ctx)</code></td><td>Lower-level: allocates a stack and sets up the initial context without registering it anywhere</td></tr>
+        <tr><td class="fn"><code>task_yield()</code></td><td>Current task voluntarily gives up the CPU</td></tr>
+        <tr><td class="fn"><code>task_sleep(ms)</code></td><td>Blocks the current task until the given number of ticks has elapsed</td></tr>
+        <tr><td class="fn"><code>scheduler_run()</code></td><td>Starts the kernel's main loop; returns once every task has terminated</td></tr>
+        <tr><td class="fn"><code>scheduler_enable_preemption(tick_ms, ticks_per_slice)</code></td><td>Starts the <code>SIGALRM</code>-driven tick that forces context switches (paired <code>_disable_</code> stops it)</td></tr>
+        <tr><td class="fn"><code>scheduler_reset()</code></td><td>Clears ready-queue bookkeeping so a test harness can boot the scheduler fresh per case</td></tr>
+        <tr><td class="fn"><code>mutex_init(m, priority_inheritance)</code> / <code>mutex_lock</code> / <code>mutex_unlock</code></td><td>Blocking mutual exclusion, with optional priority inheritance</td></tr>
+        <tr><td class="fn"><code>sem_init(s, count)</code> / <code>sem_wait</code> / <code>sem_post</code></td><td>Counting semaphore operations</td></tr>
+        <tr><td class="fn"><code>queue_init(q, buffer, capacity)</code> / <code>queue_send</code> / <code>queue_receive</code></td><td>Blocking bounded message queue</td></tr>
+        <tr><td class="fn"><code>task_canary_ok(task)</code></td><td>Checks a task's stack guard region; used internally on every dispatch</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section id="tests">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§5</span><h2>Test suite</h2></div>
+    <p><code>make test</code> builds and runs these seven, in order — each prints a <code>PASS: ...</code> line and exits 0, or aborts on a failed <code>assert()</code> with the file/line.</p>
+    <ol class="tests">
+      <li class="test"><div><div class="name">test_harness</div><div class="desc">Boots the scheduler fresh via <code>scheduler_reset()</code> for three independent cases: round-robin fairness, priority ordering, and confirming a reset really does start clean.</div></div></li>
+      <li class="test"><div><div class="name">test_preemption</div><div class="desc">A non-yielding busy-loop task still gets preempted by the tick timer, and another task still gets to run.</div></div></li>
+      <li class="test"><div><div class="name">test_priority_inversion</div><div class="desc">Asserts inversion occurs without priority inheritance and is resolved with it, using tick-count bounds.</div></div></li>
+      <li class="test"><div><div class="name">test_scheduling</div><div class="desc">4 tasks round-robin fairly under <code>task_yield()</code>.</div></div></li>
+      <li class="test"><div><div class="name">test_stress</div><div class="desc">600 short-lived tasks across 30 waves; nothing crashes and canaries stay intact throughout.</div></div></li>
+      <li class="test"><div><div class="name">test_sync_primitives</div><div class="desc">A producer/consumer pair through a queue smaller than the item count — every item arrives exactly once, in order.</div></div></li>
+      <li class="test"><div><div class="name">test_timing</div><div class="desc"><code>task_sleep()</code> wakes a task on schedule, and per-task run/ready tick stats accumulate sensibly.</div></div></li>
+    </ol>
+  </div>
+</section>
+
+<section id="validation">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§6</span><h2>Memory &amp; concurrency validation</h2></div>
+    <p class="lede">Validated with AddressSanitizer + UndefinedBehaviorSanitizer rather than the "usual" Valgrind/ThreadSanitizer answer — for reasons, not by default:</p>
+    <div class="notes" style="margin-top:16px;">
+      <div class="note">
+        <div class="tag">Why not Valgrind</div>
+        <p>Not installed in this project's environment, and no passwordless sudo to add it. AddressSanitizer catches the same leak/overflow/use-after-free class of bug — <code>test_stress.c</code>'s 600 create/destroy cycles are the main leak-check target. It doesn't fully support <code>makecontext</code>/<code>swapcontext</code>, by its own warning; no false positives were seen across many runs regardless.</p>
+      </div>
+      <div class="note">
+        <div class="tag">Why not ThreadSanitizer</div>
+        <p>Every "task" is a cooperative or signal-preempted green thread on a single real OS thread — there's no actual concurrent memory access for TSan to instrument, so a clean run wouldn't prove much. The correctness property that matters — every item arrives exactly once, in order, through a queue too small to avoid blocking — is checked with plain assertions in <code>test_sync_primitives.c</code> instead.</p>
+      </div>
+      <div class="note">
+        <div class="tag">Stack canaries</div>
+        <p>A guard region is written at the bottom (low-address end) of every task's stack at creation and checked on every dispatch. There's deliberately no "top" guard: <code>makecontext()</code> itself writes into that end of the buffer before the task ever runs once, so a guard there would misfire on setup, not on real corruption.</p>
+      </div>
+    </div>
+    <pre class="mono">make clean &amp;&amp; make SANITIZE=address,undefined
+make test</pre>
+  </div>
+</section>
+
+<section id="field-notes">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§7</span><h2>Field notes — Phase 8</h2></div>
+    <p>Two bugs surfaced only under real hardware exception semantics, invisible host-native:</p>
+    <div class="notes" style="margin-top:16px;">
+      <div class="note">
+        <div class="tag">01 · Boot scratch stack undersized</div>
+        <p>The first <code>PendSV</code> needs somewhere to "save" a nonexistent outgoing context before the first real task is picked. That scratch area was sized to the bare 16-word exception frame — exactly enough on paper, but it silently overflowed into the next static in <code>.bss</code>, corrupting <code>task_sp[1]</code> to 0 before it was ever read. Found by bisecting with a memory-mapped debug print over UART, not by guessing. Fixed by giving it real headroom (64 words).</p>
+      </div>
+      <div class="note">
+        <div class="tag">02 · An unrelated-looking edit reintroduced a hang</div>
+        <p>Renaming a helper and dropping a diagnostic print in <code>main.c</code> — pure refactoring, no logic change — brought back a <code>PendSV</code>/<code>SysTick</code> pending-but-never-serviced hang that only reproduces under Renode's specific emulation. The exact mechanism was never fully root-caused; what's confirmed is that the verified-working <code>main()</code> structure has to stay as-is.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="run">
+  <div class="wrap">
+    <div class="section-head"><span class="num">§8</span><h2>Run it</h2></div>
+    <p style="margin-bottom:20px;">Needs <code>gcc</code> + POSIX (<code>ucontext.h</code>, <code>setitimer</code>) — developed and tested on Linux/WSL. The Cortex-M4 port additionally needs <code>arm-none-eabi-gcc</code> and <a href="https://renode.io/">Renode</a>.</p>
+    <pre class="mono">git clone https://github.com/vsntll/RTOS-Kernel-From-Scratch.git
+cd RTOS-Kernel-From-Scratch/rtos
+make               <span class="dim"># builds the kernel, every test, every example</span>
+make test          <span class="dim"># runs all 7 tests in order</span>
+make examples
+./build/examples/priority_inversion_demo</pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="links">
+      <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch">Repository</a>
+      <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/README.md">Full README</a>
+      <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/docs/design.md">design.md</a>
+      <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/arm/README.md">arm/README.md</a>
+    </div>
+    <div>rtos-kernel-from-scratch · C · host-native + Cortex-M4</div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById('themeToggle');
+    var stored = localStorage.getItem('theme');
+    function apply(mode) {
+      if (mode === 'dark' || mode === 'light') {
+        root.setAttribute('data-theme', mode);
+        btn.textContent = 'MODE: ' + mode.toUpperCase();
+      } else {
+        root.removeAttribute('data-theme');
+        btn.textContent = 'MODE: AUTO';
+      }
+    }
+    apply(stored);
+    btn.addEventListener('click', function () {
+      var current = root.getAttribute('data-theme');
+      var next = current === 'dark' ? 'light' : current === 'light' ? null : 'dark';
+      if (next) { localStorage.setItem('theme', next); } else { localStorage.removeItem('theme'); }
+      apply(next);
+    });
+  })();
+</script>
+
+</body>
+</html>
