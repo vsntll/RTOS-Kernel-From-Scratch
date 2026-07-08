@@ -443,6 +443,116 @@ task falls in and out of contention, a moving picture of the exact
 scheduling behavior Phase 7d measured numerically. Full account, including
 the discovery-race bug, in `xrce/docs/design.md`'s Phase 9 section.
 
+**Phase 10 — multi-node scaling: N boards, one real agent, verified live.**
+Closes the "no multi-node support" gap Phase 6 stated plainly as a known
+limitation. `rtos/arm/ros2_demo.c`'s client_key, DDS participant name, and
+every topic name were fixed literals — one demo, one identity. Parametrized
+all four behind a compile-time `NODE_ID` (`rtos/arm/Makefile`'s
+`NODE_ID=` build variable, threaded in as `-DNODE_ID=N`, default 0 so
+existing single-node builds are unchanged), using preprocessor
+stringification rather than runtime formatting since this is still a
+freestanding, no-libc build. `host/run_multi_node.sh` builds N firmware
+variants, boots N QEMU instances each on its own `-serial pty`, and points
+one **unmodified** `MicroXRCEAgent multiserial` process at all of them —
+no custom host-side relay, since the real agent already demuxes multiple
+clients on one process natively. Getting the agent invocation right meant
+reading its own argument parser rather than guessing: `multiserial`'s
+`-D` wants **one** shell argument, space-separated
+(`-D "/dev/pts/3 /dev/pts/4"`) — both the "obvious" repeated-flag form and
+a comma-separated one fail silently. Verified live with 3 simultaneous
+QEMU boards under one real agent process: all 9 expected topics present
+with zero collisions, two boards' `/chatter_N` counters confirmed
+*independently* incrementing (not just distinctly named), and a
+`ros2 topic pub /setpoint_1 ...` confirmed echoed on `/pong_1` **and
+absent from `/pong_2`** — ruling out both the agent merging same-named
+entities across clients and this project's firmware misrouting a
+datareader across builds. Full account, including the exact agent-CLI
+gotcha and its fix, in `xrce/docs/design.md`'s Phase 10 section.
+
+**Phase 11 — security: HMAC-authenticated link, verified live end to end
+against a real agent, wrong-key rejection proven live.** Real industrial/
+automotive micro-ROS deployments need authentication on the wire; this
+project's firmware previously sent completely unauthenticated XRCE-DDS
+frames, same as a bare micro-ROS board. Added from scratch, ground-truthed
+against their own published specs the same way every other protocol piece
+in `xrce/` is: SHA-256 (FIPS 180-4, checked against NIST's own published
+digests including the million-`a` long-message vector) and HMAC-SHA256
+(RFC 2104/FIPS 198-1, checked against RFC 4231's official test cases,
+including the >block-size-key path). On top of those,
+`xrce/src/secure_transport.c` wraps every frame as
+`counter (4B) | truncated 8-byte HMAC tag | inner XRCE payload` — a
+strictly-increasing per-direction counter defeats replay, the truncated
+tag (an AUTOSAR-SecOC-style tradeoff, not weaker-crypto-by-accident) keeps
+per-frame overhead small. Critically, this does **not** change the wire
+protocol the real agent sees: since Option A's whole premise is
+zero-modification interop with a real `MicroXRCEAgent`, the authenticated
+hop only exists between firmware and a new `host/secure_gateway.c`, which
+verifies/strips it and forwards plain, standard XRCE-DDS on to an
+unmodified agent — the same trust-boundary pattern a real
+automotive/industrial gateway ECU uses. Built as an opt-in `SECURE_LINK=1`
+firmware build flag (default 0 keeps every earlier phase's direct-to-agent
+workflow byte-identical). Verified live: legitimate traffic flows
+end-to-end through the gateway into a real agent exactly as before
+(`ros2 topic echo /chatter` incrementing, `/setpoint`→`/pong` round trip
+intact); running the gateway with the wrong key rejects **every** frame
+(`ros2 topic list` shows none of the firmware's topics ever existed, gateway
+log shows `REJECTED ... bad tag` for each one) — proven live, not just
+asserted. Tamper and replay rejection are covered exhaustively at the unit
+level (`xrce/tests/test_secure_transport.c`), the same "corruption testing
+belongs at the unit level" precedent `test_serial_transport.c` already set
+in Phase 1. Confidentiality (encryption) and runtime key exchange were
+explicitly scoped out — stated plainly, not silently assumed — in
+`xrce/docs/design.md`'s Phase 11 section, which also has the full design
+rationale and every test vector's provenance.
+
+**Phase 12 — fault injection test suite: systematic, automated, degrades
+gracefully by design.** Earlier phases found real fault-tolerance
+properties ad hoc while chasing other bugs (Phase 1's CRC/resync unit
+tests, Phase 6's "killing QEMU leaves the agent unharmed" observation,
+Phase 7c's induced packet loss for QoS). This phase turns those into a
+real, repeatable suite covering the three fault categories a real
+deployment needs proof against, mirroring the same discipline `rtos/`'s
+own regression harness already applies to the kernel:
+- **Link killed mid-transaction** (`host/fault_link_kill.sh`): fully
+  automated, 4 pass/fail assertions, not manual observation. Confirms
+  live data flowing, kills the agent with `-9` mid-session and confirms
+  firmware survives, restarts a fresh agent against the *same still-running*
+  firmware and confirms automatic recovery (`ros2_demo.c`'s periodic
+  re-announce doing exactly its job, proven under a real kill/restart, not
+  just "the agent happened to attach late at boot"), then confirms the
+  agent survives the firmware being killed too. All 4 passed live.
+- **Systematic packet corruption under live load**
+  (`host/fault_corruption_proxy.py`): a byte-corrupting relay on the real
+  QEMU<->agent serial link -- proving live, against a real agent, over a
+  continuous run, what `test_serial_transport.c` already proves at the
+  unit-test level (CRC-16/ARC catches corruption and resyncs). At 0.3%
+  per-byte corruption, the full session established and `/chatter`
+  verified genuinely incrementing (`2171` -> `2592` over 5 seconds) while
+  corruption continued in the background. At 2% (roughly 1 in 8 chance
+  any ~100-byte CREATE frame survives intact), the pipeline never
+  crashed or hung across a 90-second run and kept making real incremental
+  progress (participant creation succeeded) -- slower under heavier
+  corruption, not broken by it, which is what "degrades gracefully" is
+  actually supposed to mean.
+- **A task crashing mid-publish** (`host/live_fault_demo.c`): ties
+  directly into Phase 8's diagnostics, as intended. A task runs several
+  genuinely healthy publish iterations, then deliberately corrupts its own
+  stack canary -- simulating a real overflow bug, not a contrived test
+  hook -- and the existing `task_check_canary_or_abort()` safety net
+  (checked on every context switch) halts the whole process cleanly with
+  a `FATAL` message the moment it yields next. Stated precisely rather
+  than oversold: this is a fail-*safe* design (corrupted state is caught
+  and the system stops before acting on it), not "other tasks keep
+  running while one crashes" -- verified live that the crash happened
+  exactly as designed (`FATAL: stack canary corrupted for task 'faulty'`)
+  and that the very last `/rtos/diagnostics` publish before the halt was
+  completely coherent (real stack-high-water-marks, real tick/switch
+  counts, correct WARN-level queue depth) -- nothing corrupted ever
+  reached the ROS2 side.
+
+Full transcripts and the exact numbers for all three, in
+`xrce/docs/design.md`'s Phase 12 section.
+
 ## Project structure
 
 ```
@@ -472,7 +582,8 @@ rtos/
   Makefile
 
 xrce/                       # Micro XRCE-DDS client layer (Option A), portable/OS-independent
-  include/xrce/              # serial_transport.h, cdr.h, msgs.h, session.h, reliable_stream.h
+  include/xrce/              # serial_transport.h, cdr.h, msgs.h, session.h, reliable_stream.h,
+                               # sha256.h/hmac.h/secure_transport.h (Phase 11)
   src/                        # matching .c implementations
   tests/                      # host-native unit tests, own Makefile (same pattern as rtos/)
   docs/design.md              # ground truth notes, phase-by-phase status
@@ -489,6 +600,11 @@ host/                        # host-side scripts and live-agent test programs
   live_priority_demo.c        # Phase 7d: priority-aware dispatch, links rtos/ + xrce/ together
   live_diagnostics_demo.c     # Phase 8: /rtos/diagnostics + refresh service, real task/scheduler stats
   rtos_top.py                 # Phase 9: htop-style live TUI over /rtos/diagnostics (rclpy + curses)
+  run_multi_node.sh           # Phase 10: N QEMU boards, one MicroXRCEAgent multiserial process
+  secure_gateway.c            # Phase 11: verifies/strips HMAC auth, forwards plain XRCE to a real agent
+  fault_link_kill.sh          # Phase 12: automated link-kill-mid-transaction test, 4 pass/fail assertions
+  fault_corruption_proxy.py   # Phase 12: injects live bit-flip corruption on the serial link
+  live_fault_demo.c           # Phase 12: a task deliberately crashes mid-publish, ties into /rtos/diagnostics
   pty_bridge.py               # debug tool: tees QEMU<->agent serial traffic (see xrce/docs/design.md)
   udp_loss_proxy.py           # Phase 7c: induces known packet loss for QoS testing
   bench_latency.c             # Phase 6: real host<->RTOS round-trip latency + burst-loss benchmark
@@ -563,6 +679,21 @@ top of the kernel above, not part of it:**
 - [x] Phase 9 — `htop`-style live terminal UI: verified with a real
       captured terminal screen showing task states updating live under
       the real Phase 7d priority-load scenario
+- [x] Phase 10 — Multi-node scaling: verified live, 3 simultaneous
+      QEMU boards under one real, unmodified `MicroXRCEAgent multiserial`
+      process, independent per-node data confirmed both directions with
+      zero cross-node leakage
+- [x] Phase 11 — Security: SHA-256/HMAC-SHA256 from scratch (checked
+      against NIST/RFC 4231 test vectors), HMAC-authenticated
+      firmware<->gateway link with replay protection, verified live
+      end-to-end against a real unmodified agent with wrong-key rejection
+      proven live; confidentiality/key-exchange explicitly out of scope
+- [x] Phase 12 — Fault injection test suite: automated link-kill-mid-
+      transaction (4/4 assertions passed live), live packet corruption on
+      the real serial link (0.3% converges with verified-incrementing
+      data; 2% never crashes/hangs, just slower), and a task crash
+      mid-publish tied into `/rtos/diagnostics` (fail-safe halt verified,
+      last diagnostics snapshot confirmed coherent)
 
 ## Troubleshooting
 
