@@ -13,7 +13,7 @@ static bool ensure(size_t cap, size_t pos, size_t n) {
 }
 
 static void align_writer(xrce_cdr_writer_t *w, size_t n) {
-    size_t rem = w->pos % n;
+    size_t rem = (w->pos - w->align_base) % n;
     if (rem != 0) {
         size_t pad = n - rem;
         for (size_t i = 0; i < pad && w->pos < w->cap; i++) {
@@ -23,7 +23,7 @@ static void align_writer(xrce_cdr_writer_t *w, size_t n) {
 }
 
 static bool align_reader(xrce_cdr_reader_t *r, size_t n) {
-    size_t rem = r->pos % n;
+    size_t rem = (r->pos - r->align_base) % n;
     if (rem == 0) {
         return true;
     }
@@ -39,6 +39,7 @@ void xrce_cdr_writer_init(xrce_cdr_writer_t *w, uint8_t *buf, size_t cap) {
     w->buf = buf;
     w->cap = cap;
     w->pos = 0;
+    w->align_base = 0;
 }
 
 bool xrce_cdr_write_header(xrce_cdr_writer_t *w) {
@@ -49,6 +50,7 @@ bool xrce_cdr_write_header(xrce_cdr_writer_t *w) {
     w->buf[w->pos++] = 0x01; /* representation_id = CDR_LE */
     w->buf[w->pos++] = 0x00;
     w->buf[w->pos++] = 0x00; /* representation_options, unused */
+    w->align_base = w->pos; /* subsequent fields align relative to here, not absolute 0 */
     return true;
 }
 
@@ -144,6 +146,7 @@ void xrce_cdr_reader_init(xrce_cdr_reader_t *r, const uint8_t *buf, size_t len) 
     r->buf = buf;
     r->len = len;
     r->pos = 0;
+    r->align_base = 0;
 }
 
 bool xrce_cdr_read_header(xrce_cdr_reader_t *r) {
@@ -152,6 +155,7 @@ bool xrce_cdr_read_header(xrce_cdr_reader_t *r) {
     }
     bool is_cdr_le = (r->buf[r->pos] == 0x00) && (r->buf[r->pos + 1] == 0x01);
     r->pos += 4;
+    r->align_base = r->pos; /* subsequent fields align relative to here, not absolute 0 */
     return is_cdr_le;
 }
 
