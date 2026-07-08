@@ -39,11 +39,17 @@ static void case_header_rejects_big_endian(void) {
     assert(!xrce_cdr_read_header(&r));
 }
 
-/* header(4) + u8 (no align, pos 4->5) + i32 (align4: pad 3 to pos8, write
- * 4 LE bytes, pos 12) + f64 (align8: pad 4 to pos16, write 8 LE bytes,
- * pos 24) -- exact expected byte layout, not just "it round-trips". */
+/* header(4, resets align_base to 0 -- xrce/include/xrce/cdr.h) + u8
+ * (relative pos 0, no align needed, pos 0->1) + i32 (align4 relative to
+ * align_base: pad 3 to relative pos 4/absolute pos 8, write 4 LE bytes,
+ * relative pos 8) + f64 (align8: relative pos 8 is already a multiple of
+ * 8, so NO padding here -- this is exactly the detail Phase 14's
+ * geometry_msgs/Twist found wrong in an earlier version of this file,
+ * where alignment was measured from the buffer's absolute start instead
+ * of from align_base; see xrce/docs/design.md's Phase 14 section for the
+ * real `rclpy`-captured bytes this was corrected against). */
 static void case_alignment_byte_exact(void) {
-    uint8_t buf[24];
+    uint8_t buf[20];
     memset(buf, 0xCC, sizeof(buf)); /* poison, so padding bytes are visible */
     xrce_cdr_writer_t w;
     xrce_cdr_writer_init(&w, buf, sizeof(buf));
@@ -52,15 +58,14 @@ static void case_alignment_byte_exact(void) {
     assert(xrce_cdr_write_u8(&w, 0xAB));
     assert(xrce_cdr_write_i32(&w, 0x11223344));
     assert(xrce_cdr_write_f64(&w, 1.0)); /* 0x3FF0000000000000 */
-    assert(w.pos == 24);
+    assert(w.pos == 20);
 
-    static const uint8_t expected[24] = {
+    static const uint8_t expected[20] = {
         0x00, 0x01, 0x00, 0x00,             /* header */
         0xAB,                               /* u8 */
-        0x00, 0x00, 0x00,                   /* pad to 4-align */
+        0x00, 0x00, 0x00,                   /* pad to 4-align (relative to align_base) */
         0x44, 0x33, 0x22, 0x11,             /* i32 LE */
-        0x00, 0x00, 0x00, 0x00,             /* pad pos 12->16 to 8-align */
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F, /* f64 LE */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F, /* f64 LE, no padding before it */
     };
     assert(memcmp(buf, expected, sizeof(expected)) == 0);
 
