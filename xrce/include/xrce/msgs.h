@@ -64,6 +64,20 @@ typedef struct {
 bool sensor_msgs_Imu_encode(const sensor_msgs_Imu *msg, uint8_t *buf, size_t cap, size_t *out_len);
 bool sensor_msgs_Imu_decode(const uint8_t *buf, size_t len, sensor_msgs_Imu *out);
 
+/* Phase 14: drives a simulated vehicle's diff-drive plugin in Gazebo
+ * (geometry_msgs/msg/Twist over /model/<name>/cmd_vel, bridged by
+ * ros_gz_bridge -- see xrce/docs/design.md's Phase 14 section). Just two
+ * Vector3s, reusing the write_vec3()/read_vec3() helpers Imu's
+ * angular_velocity/linear_acceleration fields already use. */
+typedef struct {
+    geometry_msgs_Vector3 linear;
+    geometry_msgs_Vector3 angular;
+} geometry_msgs_Twist;
+
+bool geometry_msgs_Twist_encode(const geometry_msgs_Twist *msg, uint8_t *buf, size_t cap,
+                                 size_t *out_len);
+bool geometry_msgs_Twist_decode(const uint8_t *buf, size_t len, geometry_msgs_Twist *out);
+
 /* std_srvs/srv/Trigger -- Phase 7b's demo service ("trigger a self-test").
  * Request has no fields at all (still gets its own 4-byte CDR header, same
  * as every other message here -- an empty struct isn't a zero-byte wire
