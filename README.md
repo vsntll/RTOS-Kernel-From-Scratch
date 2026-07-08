@@ -443,6 +443,22 @@ task falls in and out of contention, a moving picture of the exact
 scheduling behavior Phase 7d measured numerically. Full account, including
 the discovery-race bug, in `xrce/docs/design.md`'s Phase 9 section.
 
+**`host/diagnostics_logger.py` — the same `/rtos/diagnostics` stream,
+also logged to disk.** Alongside live viewing (`rtos_top.py`, `ros2 topic
+echo`), this subscribes with `rclpy` the same way and appends every
+message to disk in two formats: a `.jsonl` file (one full nested snapshot
+per line -- every task's real name/level/message and complete key/value
+stats) and a `.csv` file in tidy/long form (one row per
+`(timestamp, status, key, value)`, since different demos publish
+different task names and key sets — a fixed-column CSV would need a
+schema decided in advance and break across demos; tidy form doesn't, and
+is also the layout most ML/pandas tooling wants directly). Not tied to
+any one phase's demo -- run it alongside `live_diagnostics_demo.c`,
+`live_priority_demo.c`, or `live_fault_demo.c` and it logs whatever's
+actually running. Exists so there's a real, growing dataset on disk any
+time a demo runs, ready for offline analysis or training something later,
+without re-running anything or capturing traffic after the fact.
+
 **Phase 10 — multi-node scaling: N boards, one real agent, verified live.**
 Closes the "no multi-node support" gap Phase 6 stated plainly as a known
 limitation. `rtos/arm/ros2_demo.c`'s client_key, DDS participant name, and
@@ -600,6 +616,7 @@ host/                        # host-side scripts and live-agent test programs
   live_priority_demo.c        # Phase 7d: priority-aware dispatch, links rtos/ + xrce/ together
   live_diagnostics_demo.c     # Phase 8: /rtos/diagnostics + refresh service, real task/scheduler stats
   rtos_top.py                 # Phase 9: htop-style live TUI over /rtos/diagnostics (rclpy + curses)
+  diagnostics_logger.py       # logs /rtos/diagnostics to disk (JSONL + tidy CSV) for later analysis/training
   run_multi_node.sh           # Phase 10: N QEMU boards, one MicroXRCEAgent multiserial process
   secure_gateway.c            # Phase 11: verifies/strips HMAC auth, forwards plain XRCE to a real agent
   fault_link_kill.sh          # Phase 12: automated link-kill-mid-transaction test, 4 pass/fail assertions
