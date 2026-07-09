@@ -87,6 +87,40 @@ static void case_imu_encode_fails_on_small_buffer(void) {
     assert(!sensor_msgs_Imu_encode(&in, buf, sizeof(buf), &len));
 }
 
+/* Phase 14: geometry_msgs/Twist -- just two Vector3s, reusing the same
+ * write_vec3()/read_vec3() helpers Imu's angular_velocity/
+ * linear_acceleration fields already exercise, so this is a lighter
+ * round-trip check than Imu's rather than a repeat of the same ground. */
+static void case_twist_round_trip(void) {
+    geometry_msgs_Twist in = {
+        .linear = {.x = 0.5, .y = 0.0, .z = 0.0},
+        .angular = {.x = 0.0, .y = 0.0, .z = 0.3},
+    };
+    uint8_t buf[64];
+    size_t len;
+    assert(geometry_msgs_Twist_encode(&in, buf, sizeof(buf), &len));
+    /* 4-byte header + 6 float64 fields, no padding between them: CDR
+     * alignment resets relative to right after the header (xrce/include/
+     * xrce/cdr.h's align_base), not absolute buffer position -- confirmed
+     * against a real `rclpy.serialization.serialize_message()` capture of
+     * an actual geometry_msgs/Twist, see xrce/docs/design.md's Phase 14
+     * section for the exact bytes compared. */
+    assert(len == 4 + 6 * 8);
+
+    geometry_msgs_Twist out;
+    assert(geometry_msgs_Twist_decode(buf, len, &out));
+    assert(out.linear.x == in.linear.x && out.linear.y == in.linear.y && out.linear.z == in.linear.z);
+    assert(out.angular.x == in.angular.x && out.angular.y == in.angular.y &&
+           out.angular.z == in.angular.z);
+}
+
+static void case_twist_encode_fails_on_small_buffer(void) {
+    geometry_msgs_Twist in = {0};
+    uint8_t buf[8];
+    size_t len;
+    assert(!geometry_msgs_Twist_encode(&in, buf, sizeof(buf), &len));
+}
+
 static void case_trigger_request_round_trip(void) {
     std_srvs_Trigger_Request in = {0};
     uint8_t buf[16];
@@ -264,6 +298,8 @@ int main(void) {
     run_case("std_msgs/String round trip", case_string_round_trip);
     run_case("sensor_msgs/Imu round trip (nested + mixed alignment)", case_imu_round_trip);
     run_case("Imu encode fails cleanly on undersized buffer", case_imu_encode_fails_on_small_buffer);
+    run_case("geometry_msgs/Twist round trip", case_twist_round_trip);
+    run_case("Twist encode fails cleanly on undersized buffer", case_twist_encode_fails_on_small_buffer);
     run_case("std_srvs/Trigger request round trip (no fields)", case_trigger_request_round_trip);
     run_case("std_srvs/Trigger response round trip", case_trigger_response_round_trip);
     run_case("Fibonacci SendGoal request/response round trip", case_send_goal_round_trip);
