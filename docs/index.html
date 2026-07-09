@@ -20,6 +20,7 @@
     --accent: #b9722a;
     --accent-ink: #ffffff;
     --accent-2: #2f8f85;
+    --accent-3: #a8433f;
     --line: #cdd4de;
     --line-strong: #adb6c4;
     --grid-line: rgba(90, 100, 120, 0.09);
@@ -40,6 +41,7 @@
       --accent: #dc9a3f;
       --accent-ink: #14100a;
       --accent-2: #5fada3;
+      --accent-3: #d97a72;
       --line: #2a3142;
       --line-strong: #3a4358;
       --grid-line: rgba(200, 210, 230, 0.05);
@@ -60,6 +62,7 @@
     --accent: #dc9a3f;
     --accent-ink: #14100a;
     --accent-2: #5fada3;
+    --accent-3: #d97a72;
     --line: #2a3142;
     --line-strong: #3a4358;
     --grid-line: rgba(200, 210, 230, 0.05);
@@ -79,6 +82,7 @@
     --accent: #b9722a;
     --accent-ink: #ffffff;
     --accent-2: #2f8f85;
+    --accent-3: #a8433f;
     --line: #cdd4de;
     --line-strong: #adb6c4;
     --grid-line: rgba(90, 100, 120, 0.09);
@@ -175,15 +179,21 @@
   }
   .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
 
-  /* real tabs: each is a hyperlink (href="#tabname"), only one panel visible at a time */
+  /* real tabs: each is a hyperlink (href="#tabname"), only one panel visible at a time.
+     Consolidated to 4 (one per "Part") specifically so this fits without scrolling on
+     any normal viewport -- the fade mask below is a safety net for narrow ones, not the
+     primary fix: a hidden scrollbar with content silently cut off past the edge and no
+     visual hint more exists was the actual bug, not just "too many tabs". */
   .tabbar {
-    max-width: 920px;
+    max-width: 960px;
     margin: 0 auto;
     padding: 0 24px;
     display: flex;
     gap: 2px;
     overflow-x: auto;
     scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
   }
   .tabbar::-webkit-scrollbar { display: none; }
   .tab {
@@ -208,6 +218,8 @@
   }
   .tab .tab-n { color: var(--ink-faint); margin-right: 6px; }
   .tab.active .tab-n { color: var(--accent-2); }
+  .tab .tab-sub { color: var(--ink-faint); font-size: 0.72rem; margin-left: 4px; }
+  .tab.active .tab-sub { color: var(--ink-dim); }
 
   /* ---------- tab panels ---------- */
   .tab-panel { display: none; }
@@ -291,16 +303,16 @@
     gap: 2px;
     height: 26px;
   }
+  /* Three states, three genuinely distinct colors -- not shade/pattern
+     variants of the same hue, so the trace reads at a glance rather than
+     requiring the legend: RUNNING (accent, solid) = using the CPU right
+     now; READY (accent-2, solid) = runnable but not scheduled; BLOCKED
+     (accent-3, solid) = waiting on something external (mutex/queue/sleep),
+     not just "not running". */
   .seg { border-radius: 1px; position: relative; }
   .seg.running { background: var(--accent); }
-  .seg.ready {
-    background: transparent;
-    border: 1px dashed var(--line-strong);
-  }
-  .seg.blocked {
-    background: repeating-linear-gradient(135deg, var(--line-strong) 0, var(--line-strong) 1px, transparent 1px, transparent 6px);
-    opacity: 0.6;
-  }
+  .seg.ready { background: var(--accent-2); opacity: 0.55; }
+  .seg.blocked { background: var(--accent-3); opacity: 0.55; }
   .axis { display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px; margin: 6px 0 0 70px; }
   .axis span { font-family: "IBM Plex Mono", monospace; font-size: 0.62rem; color: var(--ink-faint); text-align: center; }
   .tickmark {
@@ -344,8 +356,8 @@
   .legend .sw { display: inline-flex; align-items: center; gap: 6px; }
   .legend i { width: 12px; height: 12px; display: inline-block; border-radius: 1px; }
   .legend i.running { background: var(--accent); }
-  .legend i.ready { border: 1px dashed var(--line-strong); }
-  .legend i.blocked { background: repeating-linear-gradient(135deg, var(--line-strong) 0, var(--line-strong) 1px, transparent 1px, transparent 4px); opacity: 0.6; }
+  .legend i.ready { background: var(--accent-2); opacity: 0.55; }
+  .legend i.blocked { background: var(--accent-3); opacity: 0.55; }
 
   /* ---------- overview (pipeline + cards) ---------- */
   .pipeline { margin: 32px 0 8px; }
@@ -369,6 +381,24 @@
     92% { opacity: 1; }
     100% { left: calc(100% - 8px); opacity: 0; }
   }
+  .pnode-hub { border-color: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2) inset; }
+
+  /* ---------- what Part 3 adds to the same pipeline above ---------- */
+  .pipeline-ext { margin-top: 18px; }
+  .pext-label { display: block; font-family: "IBM Plex Mono", monospace; font-size: 0.68rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 8px; }
+  .pext-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pext-pill {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.72rem;
+    padding: 5px 10px;
+    border-radius: 3px;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-2);
+    color: var(--ink-dim);
+  }
+  .pext-p10, .pext-p13 { border-color: var(--accent-2); color: var(--accent-2); }
+  .pext-p11, .pext-p12 { border-color: var(--accent-3); color: var(--accent-3); }
+  .pext-p14 { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 
   .overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 28px; }
   .overview-card { display: flex; gap: 16px; padding: 20px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
@@ -617,13 +647,10 @@
     <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle color theme">MODE: AUTO</button>
   </div>
   <nav class="tabbar" id="tabbar" aria-label="Site sections">
-    <a class="tab" href="#overview" data-tab="overview"><span class="tab-n">00</span>Overview</a>
-    <a class="tab" href="#kernel" data-tab="kernel"><span class="tab-n">01</span>RTOS Kernel</a>
-    <a class="tab" href="#ros2" data-tab="ros2"><span class="tab-n">02</span>ROS2 Foundation</a>
-    <a class="tab" href="#phase7" data-tab="phase7"><span class="tab-n">03</span>Phase 7</a>
-    <a class="tab" href="#phase8" data-tab="phase8"><span class="tab-n">04</span>Diagnostics</a>
-    <a class="tab" href="#phase9" data-tab="phase9"><span class="tab-n">05</span>Live TUI</a>
-    <a class="tab" href="#phase10" data-tab="phase10"><span class="tab-n">06</span>Phases 10–14</a>
+    <a class="tab" href="#overview" data-tab="overview"><span class="tab-n">P0</span>Overview</a>
+    <a class="tab" href="#kernel" data-tab="kernel"><span class="tab-n">P1</span>RTOS Kernel</a>
+    <a class="tab" href="#ros2" data-tab="ros2"><span class="tab-n">P2</span>ROS2 Layer <span class="tab-sub">(0–9)</span></a>
+    <a class="tab" href="#phase10" data-tab="phase10"><span class="tab-n">P3</span>Beyond the brief <span class="tab-sub">(10–14)</span></a>
   </nav>
 </div>
 
@@ -647,7 +674,7 @@
       <a class="btn primary" href="https://github.com/vsntll/RTOS-Kernel-From-Scratch">View source →</a>
       <a class="btn" href="#kernel" data-tab-link="kernel">RTOS kernel ↓</a>
       <a class="btn" href="#ros2" data-tab-link="ros2">ROS2 layer ↓</a>
-      <a class="btn" href="#phase7" data-tab-link="phase7">Phase 7 ↓</a>
+      <a class="btn" href="#p7a" data-tab-link="ros2">Phase 7 ↓</a>
     </div>
 
     <div class="scope" aria-hidden="true">
@@ -714,9 +741,19 @@
           <div class="pline"><span class="pdot"></span></div>
           <div class="pnode"><span class="pn-label">XRCE CLIENT</span><span class="pn-sub">serial / UDP · CDR</span></div>
           <div class="pline"><span class="pdot" style="animation-delay:0.8s"></span></div>
-          <div class="pnode"><span class="pn-label">ROS2 AGENT</span><span class="pn-sub">real · unmodified</span></div>
+          <div class="pnode pnode-hub"><span class="pn-label">ROS2 AGENT</span><span class="pn-sub">real · unmodified</span></div>
           <div class="pline"><span class="pdot" style="animation-delay:1.6s"></span></div>
           <div class="pnode"><span class="pn-label">ros2 CLI / rclpy</span><span class="pn-sub">topics · svcs · actions</span></div>
+        </div>
+        <div class="pipeline-ext">
+          <span class="pext-label">same pipeline, Part 3 (10–14) adds:</span>
+          <div class="pext-row">
+            <span class="pext-pill pext-p10">N boards, 1 agent</span>
+            <span class="pext-pill pext-p11">HMAC-secured link</span>
+            <span class="pext-pill pext-p12">fault injection</span>
+            <span class="pext-pill pext-p13">micro-ROS benchmark</span>
+            <span class="pext-pill pext-p14">Gazebo (real physics)</span>
+          </div>
         </div>
       </div>
 
@@ -761,23 +798,23 @@
       </div>
 
       <div class="jump-grid">
-        <a class="jump-tile" href="#phase7" data-tab-link="phase7">
-          <div class="jt-n">PHASE 7A–7D</div>
+        <a class="jump-tile" href="#p7a" data-tab-link="ros2">
+          <div class="jt-n">PART 2 · PHASE 7A–7D</div>
           <div class="jt-t">Deepen the middleware</div>
           <div class="jt-d">DELETE lifecycle, services &amp; actions, real QoS under induced loss, priority-aware executor</div>
         </a>
-        <a class="jump-tile" href="#phase8" data-tab-link="phase8">
-          <div class="jt-n">PHASE 8</div>
+        <a class="jump-tile" href="#phase8" data-tab-link="ros2">
+          <div class="jt-n">PART 2 · PHASE 8</div>
           <div class="jt-t">Live diagnostics</div>
           <div class="jt-d">Real task/scheduler/queue state as a standard <code>diagnostic_msgs</code> topic + service</div>
         </a>
-        <a class="jump-tile" href="#phase9" data-tab-link="phase9">
-          <div class="jt-n">PHASE 9</div>
+        <a class="jump-tile" href="#phase9" data-tab-link="ros2">
+          <div class="jt-n">PART 2 · PHASE 9</div>
           <div class="jt-t">Live terminal UI</div>
           <div class="jt-d"><code>htop</code>-style view over the diagnostics topic, verified with a real captured screen</div>
         </a>
         <a class="jump-tile" href="#phase10" data-tab-link="phase10">
-          <div class="jt-n">PHASES 10–14</div>
+          <div class="jt-n">PART 3 · PHASES 10–14</div>
           <div class="jt-t">Multi-node, security, fault injection, benchmark, Gazebo</div>
           <div class="jt-d">N boards under one agent, HMAC-authenticated link, live corruption/crash testing, a real micro-ROS comparison, and real physics driven by this RTOS</div>
         </a>
@@ -975,11 +1012,11 @@ make examples
   </section>
 </div>
 
-<!-- ============================== TAB: ROS2 FOUNDATION (Phases 0-6) ============================== -->
+<!-- ============================== TAB: ROS2 LAYER -- Part 2, Phases 0-9 (Foundation 0-6, then 7/8/9 as sections within this same tab) ============================== -->
 <div class="tab-panel" id="tab-ros2">
   <section class="no-rule">
     <div class="wrap" style="padding-top:36px;">
-      <div class="label" style="margin-bottom:8px;">PART 2 · PHASES 0–6</div>
+      <div class="label" style="margin-bottom:8px;">PART 2 · PHASES 0–9</div>
       <div class="section-head"><span class="num">§9</span><h2>ROS2 client layer — Micro XRCE-DDS (Option A)<span class="status-pill">verified live</span></h2></div>
       <p class="lede">
         On top of the Cortex-M4 port, <code>xrce/</code> implements enough of the real
@@ -988,10 +1025,17 @@ make examples
         <code>MicroXRCEAgent</code> binary and publish into a real ROS2 graph. Not a custom
         protocol reimplemented from imagination: every wire-format detail below is checked
         against eProsima's reference client <em>source</em>, and verified against the actual
-        agent, logs included. This is the foundation Phase 7 (next tab) builds on.
+        agent, logs included. This is the foundation Phases 7–9 below build on, all still
+        Part 2 — one continuous ROS2 client layer, not four separate projects.
       </p>
+      <div class="subnav">
+        <a href="#p0-6">Foundation (0–6)</a>
+        <a href="#p7a">Phase 7 · Deepen the middleware</a>
+        <a href="#phase8">Phase 8 · Diagnostics</a>
+        <a href="#phase9">Phase 9 · Live TUI</a>
+      </div>
 
-      <h3 style="margin-top:30px;">What's implemented</h3>
+      <h3 style="margin-top:30px;" id="p0-6">What's implemented</h3>
       <ul class="phases">
         <li class="phase"><span class="n">P0</span><span class="t">Toolchain + QEMU port</span><span class="d">qemu-system-arm, ROS2 Jazzy, agent built from source</span></li>
         <li class="phase"><span class="n">P1</span><span class="t">Serial transport framing</span><span class="d">byte-stuffed, CRC-16/ARC — unit-tested</span></li>
@@ -1069,11 +1113,9 @@ gcc -Ixrce/include host/bench_latency.c xrce/build/libxrce.a -o /tmp/bench
 /tmp/bench 127.0.0.1 8888 burst 30    <span class="dim"># back-to-back burst, measures loss</span></pre>
     </div>
   </section>
-</div>
 
-<!-- ============================== TAB: PHASE 7 ============================== -->
-<div class="tab-panel" id="tab-phase7">
-  <section class="no-rule">
+  <!-- ---------------- Phase 7 (still Part 2) ---------------- -->
+  <section class="no-rule" id="phase7-intro">
     <div class="wrap" style="padding-top:36px;">
       <div class="label" style="margin-bottom:8px;">PART 2 · PHASE 7</div>
       <h2 style="font-size:1.6rem;">Deepen the middleware<span class="status-pill">7a–7d complete</span></h2>
@@ -1210,11 +1252,9 @@ reliable:    sent 20 samples in 1667ms across 8 heartbeat round(s), 43 retransmi
       </div>
     </div>
   </section>
-</div>
 
-<!-- ============================== TAB: PHASE 8 (DIAGNOSTICS) ============================== -->
-<div class="tab-panel" id="tab-phase8">
-  <section class="no-rule">
+  <!-- ---------------- Phase 8 (still Part 2) ---------------- -->
+  <section class="no-rule" id="phase8">
     <div class="wrap" style="padding-top:36px;">
       <div class="label" style="margin-bottom:8px;">PART 2 · PHASE 8</div>
       <div class="section-head"><span class="num">§8</span><h2>Diagnostics / introspection<span class="status-pill">verified live</span></h2></div>
@@ -1275,11 +1315,9 @@ std_srvs.srv.Trigger_Response(success=True, message='refreshed')</pre>
       <p style="margin-top:16px;">What isn't tracked — queue drop counts, missed deadlines — is stated as a known gap rather than invented: <code>queue_send()</code> blocks rather than drops by design, and this kernel has no deadline concept yet, only sleep wake times.</p>
     </div>
   </section>
-</div>
 
-<!-- ============================== TAB: PHASE 9 (LIVE TUI) ============================== -->
-<div class="tab-panel" id="tab-phase9">
-  <section class="no-rule">
+  <!-- ---------------- Phase 9 (still Part 2) ---------------- -->
+  <section class="no-rule" id="phase9">
     <div class="wrap" style="padding-top:36px;">
       <div class="label" style="margin-bottom:8px;">PART 2 · PHASE 9</div>
       <div class="section-head"><span class="num">§9</span><h2>Live terminal UI<span class="status-pill">verified with a real captured screen</span></h2></div>
@@ -1378,8 +1416,8 @@ python3 host/rtos_top.py   <span class="dim"># q to quit</span></pre>
 /pong_1     /pong_2     /pong_3
 
 $ ros2 topic echo /chatter_2 --once   &amp;&amp;   ros2 topic echo /chatter_3 --once
-data: 880
-data: 962   <span class="dim"># genuinely independent counters, not a shared/duplicated stream</span></pre>
+data: 17785
+data: 19793   <span class="dim"># genuinely independent counters, not a shared/duplicated stream</span></pre>
       <p style="margin-top:12px;"><code>host/run_multi_node.sh</code> builds N firmware variants, boots N QEMU instances each on its own pty, and points one <code>MicroXRCEAgent multiserial</code> at all of them.</p>
     </div>
   </section>
@@ -1432,9 +1470,9 @@ $ ros2 topic list
           <p>A task runs several genuinely healthy iterations, then deliberately corrupts its own stack canary. The existing fail-safe design (checked every context switch) halts the whole process cleanly with a <code>FATAL</code> message — not "other tasks keep running," stated precisely. The last <code>/rtos/diagnostics</code> publish before the halt was confirmed completely coherent.</p>
         </div>
       </div>
-      <pre class="mono" style="margin-top:16px;">PASS: baseline: live data flowing before any fault (data=1152)
+      <pre class="mono" style="margin-top:16px;">PASS: baseline: live data flowing before any fault (data=645)
 PASS: firmware (QEMU) survives agent being killed mid-session
-PASS: automatic recovery after agent restart, no firmware intervention (data=1288)
+PASS: automatic recovery after agent restart, no firmware intervention (data=1202)
 PASS: agent survives firmware being killed mid-session
 4 passed, 0 failed
 
@@ -1535,17 +1573,22 @@ sensor_msgs/Imu(frame_id="imu_link", orientation.w=1.0):
 
   /* ---------- tabs, driven by the URL hash so every tab is a real, shareable link ---------- */
   (function () {
-    var tabIds = ['overview', 'kernel', 'ros2', 'phase7', 'phase8', 'phase9', 'phase10'];
+    var tabIds = ['overview', 'kernel', 'ros2', 'phase10'];
     var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
     var panels = {};
     tabIds.forEach(function (id) { panels[id] = document.getElementById('tab-' + id); });
 
     // sub-section ids that live inside a tab, so a link like #run or #p7c
-    // still opens the right tab first, then scrolls to that anchor.
+    // still opens the right tab first, then scrolls to that anchor. The
+    // ROS2 tab (Part 2) bundles Phases 0-9 -- Foundation, 7a-d, 8, 9 --
+    // as anchors within one tab rather than separate top-level tabs, so
+    // the tab bar stays short and every phase's "which part" is
+    // unambiguous instead of implied by tab position.
     var sectionToTab = {
       why: 'kernel', architecture: 'kernel', roadmap: 'kernel', api: 'kernel',
       tests: 'kernel', validation: 'kernel', 'field-notes': 'kernel', run: 'kernel',
-      p7a: 'phase7', p7b: 'phase7', p7c: 'phase7', p7d: 'phase7',
+      'p0-6': 'ros2', p7a: 'ros2', p7b: 'ros2', p7c: 'ros2', p7d: 'ros2',
+      phase8: 'ros2', phase9: 'ros2',
       p10: 'phase10', p11: 'phase10', p12: 'phase10', p13: 'phase10', p14: 'phase10'
     };
 
