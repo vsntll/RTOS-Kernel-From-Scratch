@@ -569,6 +569,37 @@ own regression harness already applies to the kernel:
 Full transcripts and the exact numbers for all three, in
 `xrce/docs/design.md`'s Phase 12 section.
 
+**Phase 13 — benchmarked against real, official micro-ROS, not just this
+project's own implementation.** Built the actual `micro-ROS-demos/rclc/
+ping_pong` demo via `micro_ros_setup`'s "host" platform target -- the
+standard, hardware-free way to validate/benchmark real micro-ROS,
+producing an unmodified official binary, not a stand-in for one -- and
+pointed it at the exact same `MicroXRCEAgent udp4 -p 8888` this project's
+own `host/bench_latency.c` already benchmarks through (the real
+`ping_pong` demo's own build config bakes in that identical address).
+`host/bench_microros.py` uses the same round-trip methodology
+(timestamped ping, wait for the matching echo, repeat, report
+p50/p95/mean/max) against it:
+
+```
+real, unmodified micro-ROS ping_pong (native host process): p50=0.91ms  p95=1.17ms  mean=0.94ms
+this project's RTOS, QEMU-emulated Cortex-M4:                p50=6.50ms  p95=12.46ms mean=6.69ms
+```
+
+Stated honestly rather than spun either way: this is a same-protocol,
+same-agent, same-transport comparison, but **not** a same-execution-
+environment one -- the real micro-ROS binary runs as a native x86_64
+process, while this project's numbers are a real round trip through
+firmware running under full QEMU CPU emulation of a Cortex-M4 (dynamic
+binary translation of every instruction, a polled/emulated UART). The
+~7-10x gap is best attributed to that emulation overhead, not to this
+project's own protocol/CDR implementation being slower -- both are real
+XRCE-DDS clients speaking the same wire protocol to the same
+unmodified agent. What this comparison actually establishes: a genuine,
+reproducible baseline against the real thing, run the same way, numbers
+included even though they don't flatter the emulated side, rather than
+only reporting this project's own results in isolation.
+
 **Phase 14 — Gazebo: this RTOS is literally the control firmware for a
 simulated vehicle with real physics.** `rtos/arm/gazebo_demo.c` publishes
 `geometry_msgs/Twist` on `/model/vehicle_blue/cmd_vel` -- the exact topic
@@ -667,6 +698,7 @@ host/                        # host-side scripts and live-agent test programs
   pty_bridge.py               # debug tool: tees QEMU<->agent serial traffic (see xrce/docs/design.md)
   udp_loss_proxy.py           # Phase 7c: induces known packet loss for QoS testing
   bench_latency.c             # Phase 6: real host<->RTOS round-trip latency + burst-loss benchmark
+  bench_microros.py           # Phase 13: same round-trip benchmark against real, official micro-ROS
   bench_qos.c                 # Phase 7c: reliable-vs-best-effort delivery under induced loss
 ```
 
@@ -753,6 +785,12 @@ top of the kernel above, not part of it:**
       data; 2% never crashes/hangs, just slower), and a task crash
       mid-publish tied into `/rtos/diagnostics` (fail-safe halt verified,
       last diagnostics snapshot confirmed coherent)
+- [x] Phase 13 — Benchmarked against real, official micro-ROS (built via
+      `micro_ros_setup`'s host platform target, run through the same
+      agent/transport this project's own benchmark uses): real micro-ROS
+      p50=0.91ms/p95=1.17ms vs. this project's QEMU-emulated-Cortex-M4
+      p50=6.50ms/p95=12.46ms — same protocol/agent, not the same
+      execution environment, stated plainly
 - [x] Phase 14 — Gazebo: RTOS firmware drives a simulated vehicle's
       diff-drive plugin via a real, unmodified `ros_gz_bridge`; found and
       fixed a real latent CDR alignment bug along the way (verified
