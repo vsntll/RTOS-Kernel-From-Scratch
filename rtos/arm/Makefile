@@ -101,3 +101,38 @@ $(ROS2_BIN): $(ROS2_ELF)
 
 .PHONY: ros2_demo
 ros2_demo: $(ROS2_ELF) $(ROS2_BIN)
+
+# ---- Gazebo demo (Phase 14): a second, publish-only entry point sharing
+# ros2_demo's session/framing machinery (xrce/ sources, NODE_ID/SECURE_LINK)
+# but with its own main.c-equivalent (gazebo_demo.c) that drives a
+# simulated vehicle's diff-drive plugin instead of the rt/chatter demo. ----
+GZ_CFLAGS   := $(CFLAGS) -I$(XRCE_DIR)/include -DNODE_ID=$(NODE_ID) -DSECURE_LINK=$(SECURE_LINK)
+GZ_APP_SRCS := kernel_arm.c uart.c libc_shim.c gazebo_demo.c
+GZ_BUILD_DIR := $(BUILD_DIR)/gazebo/node$(NODE_ID)$(SEC_SUFFIX)
+GZ_OBJS     := $(patsubst %.c,$(GZ_BUILD_DIR)/%.o,$(GZ_APP_SRCS)) \
+               $(patsubst %.c,$(GZ_BUILD_DIR)/%.o,$(ROS2_XRCE_SRCS)) \
+               $(GZ_BUILD_DIR)/startup.o $(GZ_BUILD_DIR)/context_switch.o
+
+GZ_ELF := $(BUILD_DIR)/gazebo_demo_node$(NODE_ID)$(SEC_SUFFIX).elf
+GZ_BIN := $(BUILD_DIR)/gazebo_demo_node$(NODE_ID)$(SEC_SUFFIX).bin
+
+$(GZ_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(GZ_BUILD_DIR)
+	$(CC) $(GZ_CFLAGS) -c $< -o $@
+
+$(GZ_BUILD_DIR)/%.o: %.s | $(BUILD_DIR)
+	@mkdir -p $(GZ_BUILD_DIR)
+	$(AS) $(CPU_FLAGS) -c $< -o $@
+
+$(GZ_BUILD_DIR)/%.o: $(XRCE_DIR)/src/%.c | $(BUILD_DIR)
+	@mkdir -p $(GZ_BUILD_DIR)
+	$(CC) $(GZ_CFLAGS) -c $< -o $@
+
+$(GZ_ELF): $(GZ_OBJS)
+	$(CC) $(LDFLAGS) $(GZ_OBJS) -o $@
+
+$(GZ_BIN): $(GZ_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+.PHONY: gazebo_demo
+gazebo_demo: $(GZ_ELF) $(GZ_BIN)
