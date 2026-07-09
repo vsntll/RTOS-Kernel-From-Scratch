@@ -1307,6 +1307,81 @@ Nothing corrupted ever reached the ROS2 side, and -- because the process
 is gone -- no further updates ever arrive, an observable "flatline"
 rather than a stream of garbage.
 
+## Phase 13 — Benchmarked against real, official micro-ROS
+
+Every earlier benchmark (Phase 6's latency/burst-loss numbers) measured
+only this project's own implementation. This phase adds a real,
+independent baseline: the actual, unmodified official micro-ROS
+`ping_pong` demo (`micro-ROS-demos/rclc/ping_pong`), run the same way,
+through the same agent, and compared with the same methodology.
+
+**Building real micro-ROS without hardware.** `micro_ros_setup` (the
+official micro-ROS build tooling) supports a `host` platform target
+specifically for this: compiling the real micro-ROS client stack
+(`rcl`, `rclc`, `rmw_microxrcedds`, `rosidl_typesupport_microxrcedds`, the
+`Micro-XRCE-DDS-Client` reference library itself) as native x86_64
+binaries instead of cross-compiling for a board, intended for exactly
+this kind of validation/benchmarking without hardware. Two real,
+non-obvious dependency gaps needed a fresh `sudo apt install` each (not
+guessed at -- resolved via `rosdep install --simulate`'s own dry-run
+output both times): `liblog4cxx-dev clang clang-tidy clang-format` for
+the host platform's own package.xml, then `flex bison usbutils` once the
+actual client workspace's full dependency set (`rcl`/`rclc`/`rosidl`
+transitively) was resolvable. `sudo rosdep init && rosdep update` (a
+one-time system config step, not a package install) was also required
+before either of those.
+
+**Same agent, same transport, same port -- not a coincidence.** The host
+platform's own `client-host-colcon.meta` (part of `micro_ros_setup`,
+unmodified) bakes in `RMW_UXRCE_TRANSPORT=udp`,
+`RMW_UXRCE_DEFAULT_UDP_IP=127.0.0.1`, `RMW_UXRCE_DEFAULT_UDP_PORT=8888`
+-- exactly the address `host/bench_latency.c` already benchmarks this
+project's own RTOS through. Running the real `ping_pong` binary with
+`RMW_IMPLEMENTATION=rmw_microxrcedds` against a real
+`MicroXRCEAgent udp4 -p 8888` produced real XRCE-DDS entities
+(participant/topics/publisher/subscriber/datawriter, confirmed in the
+agent's own log) and real ROS2 topics visible via the system's normal
+`ros2 topic list` (`/microROS/ping`, `/microROS/pong`) -- the same
+"real, unmodified agent" standard this project already holds itself to,
+now applied to the thing being compared against too.
+
+**`host/bench_microros.py`** uses `host/bench_latency.c`'s exact
+methodology (publish a uniquely-tagged, timestamped message, wait for
+the matching echo, time the round trip, repeat, report
+p50/p95/mean/max) rather than trusting the demo's own console log
+output, which isn't designed for timing. The real `ping_pong` demo
+doesn't correlate replies to a specific external caller -- it echoes any
+ping it didn't send itself onto `/microROS/pong` -- which this script
+exploits directly: publish a `std_msgs/Header` with a unique `frame_id`
+to `/microROS/ping`, and the running (unmodified) demo process echoes it
+straight back.
+
+**Results, 100 trials each:**
+
+```
+real, unmodified micro-ROS ping_pong (native host process): p50=0.91ms  p95=1.17ms  mean=0.94ms  (99/100 delivered)
+this project's RTOS, QEMU-emulated Cortex-M4 (Phase 6):      p50=6.50ms  p95=12.46ms mean=6.69ms
+```
+
+**What this comparison does and doesn't establish, stated precisely.**
+This is a genuine same-protocol, same-agent, same-transport comparison --
+both are real XRCE-DDS clients speaking the identical wire protocol to
+the identical unmodified agent process, not an approximation of one. It
+is **not** a same-execution-environment comparison: the real micro-ROS
+binary runs natively on the host CPU, while this project's numbers are a
+real round trip through firmware running under full QEMU TCG emulation
+of a Cortex-M4 -- dynamic binary translation of every instruction, plus a
+polled (not interrupt-driven) UART, both real sources of overhead a
+native process simply doesn't have. The ~7-10x gap is best attributed to
+that emulation overhead, not to this project's own protocol/CDR
+implementation being meaningfully slower than the reference one -- but
+this project makes no claim to have isolated exactly how much of the gap
+is which, and states that plainly rather than picking whichever
+attribution flatters the result. The actual, defensible claim: a real,
+reproducible baseline against the official implementation, run the same
+way, numbers reported even where they don't favor this project, rather
+than only ever measuring against itself.
+
 ## Phase 14 — Gazebo: real physics, controlled by this RTOS
 
 Every earlier phase proves data flows correctly between this RTOS and a
@@ -1442,7 +1517,7 @@ particular demo's phases produce a clean two-segment trajectory.
 
 ## Later phases
 
-Every planned phase (1-12, 14) has now landed. Future work, if any, gets
+Every planned phase (1-14) has now landed. Future work, if any, gets
 tracked at the top-level project plan level; this file's convention (a
 new dated section per phase) stops here since there are no more phases
 queued.
