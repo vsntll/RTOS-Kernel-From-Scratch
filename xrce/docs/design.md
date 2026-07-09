@@ -1515,9 +1515,142 @@ rate observed; what's verified is that the simulated vehicle responds
 correctly to whatever rate of commands actually arrives, not that this
 particular demo's phases produce a clean two-segment trajectory.
 
+## Phase 15 — Perception layer
+
+Phase 14 proved this RTOS's own commands genuinely control real Gazebo
+physics. This phase adds the other direction: a real camera on the
+simulated vehicle, and a real pretrained object detector consuming its
+feed, publishing standard ROS2 detection messages any real tool (rviz2,
+Foxglove, another node) can consume.
+
+**A real camera sensor, not a stand-in for one.** `host/gazebo/
+diff_drive_camera.sdf` is a project-owned copy of gz-sim's own bundled
+`diff_drive.sdf` (copied rather than edited in place, so this is
+reproducible from a clean checkout, not dependent on modifying a vendor-
+installed file) with a `<sensor type="camera">` added to `vehicle_blue`'s
+chassis link, front-facing, 640x480, 60 degree horizontal FOV. Needed
+adding the `gz-sim-sensors-system` plugin to the world too (not present
+in the original demo, since it never used a sensor) -- confirmed missing
+by checking the original file's plugin list before assuming it was
+already there. Bridged to real ROS2 topics by an unmodified
+`ros_gz_bridge parameter_bridge`, the same tool and pattern Phase 14
+already established:
+
+```
+/camera@sensor_msgs/msg/Image[gz.msgs.Image
+/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo
+```
+
+Verified live: `ros2 topic echo /camera --once --no-arr` shows a real
+640x480 `rgb8` image, `step: 1920` (= 640 x 3, correct for 3-channel
+8-bit), `data` length 921600 (= 640 x 480 x 3, correct) -- not an empty
+or malformed message. `camera_info` shows real, non-placeholder
+intrinsics (`fx=fy=554.38`, principal point at the image center
+`(320, 240)`) matching the configured FOV, and `frame_id:
+vehicle_blue::chassis::camera`, confirming the sensor is correctly
+attached where intended.
+
+**A real object to detect, not an empty scene.** A COCO-pretrained
+detector never fires a "person" class on a box or cylinder primitive --
+proving the pipeline actually works needs a real person-shaped object in
+the camera's view, not just any object. Added a walking-actor (a real
+animated person mesh, the same one gz-sim's own bundled `actor.sdf` demo
+uses, Fuel-hosted and cached locally after the first fetch --
+confirmed present at `~/.gz/fuel/.../walk.dae` after a run, not assumed)
+on a short back-and-forth trajectory directly in front of
+`vehicle_blue`'s spawn point and heading.
+
+**Model: YOLOv8n ("nano"), pretrained on COCO, run as-is.** Not trained
+or fine-tuned here -- a real pretrained model, the same "real,
+unmodified" bar this project already holds the XRCE-DDS agent and the
+Gazebo bridge to. `host/perception_node.py` (rclpy) subscribes to
+`/camera`, runs inference via `ultralytics`, and publishes
+`vision_msgs/Detection2DArray` -- the standard ROS2 type for this, not a
+custom message, so any real ROS2 tool can consume it unmodified. Also
+publishes an annotated copy of the frame (boxes + labels drawn directly
+on the image, `/detections_image`): rviz2 has no built-in
+Detection2DArray-over-image overlay display, so the standard way to see
+"boxes overlaid on the live feed" in rviz2 itself is to view this
+annotated image topic with its ordinary Image display, rather than
+requiring a project-specific rviz plugin.
+
+**A real, non-ROS Python dependency problem, solved the standard way.**
+`torch`/`torchvision`/`ultralytics` aren't ROS2 or apt packages, and this
+WSL image's system Python refuses a plain `pip install --user torch`
+outright (`error: externally-managed-environment`, PEP 668 -- confirmed
+by testing, not assumed). `host/setup_perception_venv.sh` creates a
+dedicated venv with `--system-site-packages`, which combined with
+`source /opt/ros/*/setup.bash` (both are just `PYTHONPATH` contributions)
+makes the system's `rclpy`/`cv_bridge` visible alongside the venv's own
+pinned `torch`/`torchvision`/`ultralytics` -- confirmed live that this
+specific combination is required: `import rclpy` fails without
+`--system-site-packages`, and fails again without ROS2 sourced, even
+with it.
+
+**Two more real bugs found by testing, not guessed, same discipline as
+every earlier phase:**
+- Installing `torch` and `torchvision` in two separate steps produced a
+  real version mismatch: `RuntimeError: operator torchvision::nms does
+  not exist` at model load time, since `torchvision`'s compiled ops are
+  tied to a specific `torch` build. Fixed by installing both together in
+  one `pip install torch torchvision` (letting pip's own resolver pick a
+  matched pair) instead of pinning version numbers by hand.
+- A three-way dependency conflict: `torch`/`torchvision` want
+  `numpy>=2`, but the *system's* `matplotlib` (pulled in transitively
+  by `ultralytics` importing its own training-only modules even for pure
+  inference -- an `ultralytics` packaging quirk, not something this
+  project controls) was compiled against NumPy 1.x's ABI and crashes
+  under NumPy 2.x (`ImportError: numpy.core.multiarray failed to
+  import`). Pinning `numpy<2` in the venv (after the matched
+  torch/torchvision pair above) resolved both problems together --
+  confirmed by testing the combination, not assumed to work from either
+  fix in isolation. Separately, `ultralytics`'s own `opencv-python`
+  dependency shadowed the system's `cv2` (the one `cv_bridge`'s compiled
+  core was actually built against), causing a real
+  `KeyError: 16` inside `cv_bridge.cv2_to_imgmsg()` the first time the
+  node tried to publish an annotated frame. Fixed by uninstalling the
+  venv's own `opencv-python` so `cv2` resolves to the system install via
+  `--system-site-packages` instead -- `ultralytics` itself works fine
+  against the older system OpenCV (4.6.0), it just didn't need its own
+  copy.
+
+**Verified live end to end**, with the camera-equipped world, the real
+bridge, and the perception node all running together
+(`host/run_perception.sh`):
+
+```
+class_id: person
+score: 0.9041926264762878
+bbox: center (317.0, 207.9), size_x 149.2   # roughly centered in a 640x480 frame, a real, sensible box
+```
+
+Sustained over 150+ consecutive frames (`154 total` detections logged),
+not a one-off. A saved frame from `/detections_image` -- the actual
+bytes on the actual ROS2 topic, not a mockup -- shows a correctly
+tight, correctly labeled `person 0.91` green box drawn around the
+walking actor's real rendered mesh, confirming the whole pipeline
+(camera render -> bridge -> inference -> annotation -> publish) end to
+end.
+
+**Known limitations, stated plainly:**
+- No GUI/display available in this environment to launch `rviz2` itself
+  and confirm the box rendering interactively -- verified instead by
+  saving and inspecting an actual frame from `/detections_image`, which
+  is the same bytes `rviz2`'s Image display would render; a real GUI
+  session should be able to point `rviz2` at that topic directly with no
+  further changes.
+- The model is used exactly as pretrained on COCO, not fine-tuned for
+  this project's specific simulated scene -- stated as a deliberate
+  scope boundary (Phase 15's brief is "run a small pretrained model",
+  not "train one"), not an oversight.
+- Detection latency/rate is whatever this host's CPU-only inference and
+  the venv's specific torch build produce -- not benchmarked or tuned,
+  since the deliverable is correctness (real boxes on a real feed), not
+  a performance number.
+
 ## Later phases
 
-Every planned phase (1-14) has now landed. Future work, if any, gets
+Every planned phase (1-15) has now landed. Future work, if any, gets
 tracked at the top-level project plan level; this file's convention (a
 new dated section per phase) stops here since there are no more phases
 queued.
