@@ -459,6 +459,12 @@ actually running. Exists so there's a real, growing dataset on disk any
 time a demo runs, ready for offline analysis or training something later,
 without re-running anything or capturing traffic after the fact.
 
+### Part 3 — beyond the original brief (Phases 10–14)
+
+Every phase in the original brief (Part 2 above, Phases 0–9) was done as
+of Phase 9. These five go past it — still the same `xrce/` layer and
+Phase-N numbering track as Part 2, just past where the brief stopped.
+
 **Phase 10 — multi-node scaling: N boards, one real agent, verified live.**
 Closes the "no multi-node support" gap Phase 6 stated plainly as a known
 limitation. `rtos/arm/ros2_demo.c`'s client_key, DDS participant name, and
@@ -724,7 +730,12 @@ Full parameter details, return codes, and internal data structures are in
 ## Roadmap / build phases
 
 This kernel was built incrementally; each phase is a working, testable
-milestone rather than a big-bang implementation:
+milestone rather than a big-bang implementation. Three parts, each with
+**its own Phase-N numbering** — a kernel "Phase 8" and a ROS2-layer
+"Phase 8" are unrelated milestones that happen to share a number; the
+part label is what actually disambiguates them, not the number alone.
+
+### Part 1 — RTOS Kernel (`rtos/`), own numbering, Phases 1–8
 
 - [x] Phase 1 — Task representation and context switching
 - [x] Phase 2 — Cooperative scheduler
@@ -735,8 +746,11 @@ milestone rather than a big-bang implementation:
 - [x] Phase 7 — Testing and hardening (fuzzing, stack canaries)
 - [x] Phase 8 (stretch) — Cortex-M4 port, boots under QEMU (primary) and Renode
 
-**ROS2 client layer (`xrce/`), tracked separately since it's a layer on
-top of the kernel above, not part of it:**
+### Part 2 — ROS2 client layer (`xrce/`), own numbering, Phases 0–9
+
+A layer on top of the kernel above, not part of it — tracked separately,
+and the reason it starts back at Phase 0 rather than continuing the
+kernel's Phase 9:
 
 - [x] Phase 0 — WSL toolchain (`qemu-system-arm`, ROS2 Jazzy, agent build); ARM port moved to QEMU-primary
 - [x] Phase 1 — Serial transport framing, unit-tested
@@ -770,6 +784,12 @@ top of the kernel above, not part of it:**
 - [x] Phase 9 — `htop`-style live terminal UI: verified with a real
       captured terminal screen showing task states updating live under
       the real Phase 7d priority-load scenario
+
+### Part 3 — Beyond the original brief, same numbering track as Part 2, Phases 10–14
+
+Every phase in the original brief (Parts 1 and 2 above) was done as of
+Phase 9. These five go past it:
+
 - [x] Phase 10 — Multi-node scaling: verified live, 3 simultaneous
       QEMU boards under one real, unmodified `MicroXRCEAgent multiserial`
       process, independent per-node data confirmed both directions with
