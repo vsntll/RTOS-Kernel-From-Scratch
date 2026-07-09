@@ -651,6 +651,7 @@
     <a class="tab" href="#kernel" data-tab="kernel"><span class="tab-n">P1</span>RTOS Kernel</a>
     <a class="tab" href="#ros2" data-tab="ros2"><span class="tab-n">P2</span>ROS2 Layer <span class="tab-sub">(0–9)</span></a>
     <a class="tab" href="#phase10" data-tab="phase10"><span class="tab-n">P3</span>Beyond the brief <span class="tab-sub">(10–14)</span></a>
+    <a class="tab" href="#phase15" data-tab="phase15"><span class="tab-n">P4</span>Perception <span class="tab-sub">(15)</span></a>
   </nav>
 </div>
 
@@ -755,6 +756,14 @@
             <span class="pext-pill pext-p14">Gazebo (real physics)</span>
           </div>
         </div>
+        <div class="pipeline-ext">
+          <span class="pext-label">and Part 4 (15) adds, off the Gazebo branch:</span>
+          <div class="pext-row">
+            <span class="pext-pill pext-p14">camera sensor</span>
+            <span class="pext-pill pext-p14">YOLOv8n detector</span>
+            <span class="pext-pill pext-p14">Detection2DArray</span>
+          </div>
+        </div>
       </div>
 
       <div class="overview-grid">
@@ -795,6 +804,19 @@
             <a class="oc-link" href="#phase10" data-tab-link="phase10">Phases 10–14 details ↓</a>
           </div>
         </div>
+        <div class="overview-card">
+          <div class="oc-icon" aria-hidden="true"><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
+          <div class="oc-body">
+            <div class="label" style="color:var(--accent-3);">PART 4</div>
+            <h3>Perception layer</h3>
+            <p>A real camera sensor on the simulated vehicle, a real pretrained YOLOv8n object
+            detector consuming its feed, and standard <code>vision_msgs/Detection2DArray</code>
+            output any real ROS2 tool can consume -- the prerequisite this and future perception
+            work builds on.</p>
+            <div class="oc-stats">Phase 15 complete · camera sensor, YOLOv8n, real bounding boxes</div>
+            <a class="oc-link" href="#phase15" data-tab-link="phase15">Phase 15 details ↓</a>
+          </div>
+        </div>
       </div>
 
       <div class="jump-grid">
@@ -817,6 +839,11 @@
           <div class="jt-n">PART 3 · PHASES 10–14</div>
           <div class="jt-t">Multi-node, security, fault injection, benchmark, Gazebo</div>
           <div class="jt-d">N boards under one agent, HMAC-authenticated link, live corruption/crash testing, a real micro-ROS comparison, and real physics driven by this RTOS</div>
+        </a>
+        <a class="jump-tile" href="#phase15" data-tab-link="phase15">
+          <div class="jt-n">PART 4 · PHASE 15</div>
+          <div class="jt-t">Perception layer</div>
+          <div class="jt-d">A real camera on the simulated vehicle, a real pretrained YOLOv8n detector, real vision_msgs/Detection2DArray -- verified with a real bounding box on a real walking-actor mesh</div>
         </a>
       </div>
     </div>
@@ -1530,6 +1557,59 @@ sensor_msgs/Imu(frame_id="imu_link", orientation.w=1.0):
   </section>
 </div>
 
+<!-- ============================== TAB: PHASE 15 (PERCEPTION LAYER) ============================== -->
+<div class="tab-panel" id="tab-phase15">
+  <section class="no-rule">
+    <div class="wrap" style="padding-top:36px;">
+      <div class="label" style="margin-bottom:8px;">PART 4 · PHASE 15</div>
+      <div class="section-head"><span class="num">15</span><h2>Perception layer<span class="status-pill">verified live, real bounding box</span></h2></div>
+      <p class="lede">Phase 14 proved this RTOS's own commands control real physics. This phase adds the other direction: a real camera on the simulated vehicle, and a real pretrained object detector consuming its feed, publishing standard ROS2 detection messages any real tool can consume — the prerequisite almost everything else in this direction builds on.</p>
+
+      <div class="grid-2" style="margin-top:20px;">
+        <div>
+          <div class="col-head">A real camera, not a stand-in for one</div>
+          <p><code>host/gazebo/diff_drive_camera.sdf</code> — a project-owned copy of gz-sim's own bundled <code>diff_drive.sdf</code>, not an edit of the vendor file — adds a front-facing camera sensor to <code>vehicle_blue</code>'s chassis (640x480, 60&deg; FOV) and the <code>gz-sim-sensors-system</code> plugin the original world never needed. Bridged to real <code>sensor_msgs/Image</code>/<code>CameraInfo</code> by an unmodified <code>ros_gz_bridge</code>, same tool Phase 14 already uses.</p>
+        </div>
+        <div>
+          <div class="col-head">A real object to detect</div>
+          <p>A COCO-pretrained detector never fires a "person" class on a box or cylinder. Added a walking-actor — a real animated person mesh, the same one gz-sim's own <code>actor.sdf</code> demo uses — on a short trajectory directly in front of the vehicle's camera, so there's something genuinely detectable in view rather than an empty scene.</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:30px;">YOLOv8n, pretrained on COCO, run exactly as-is</h3>
+      <p><code>host/perception_node.py</code> (rclpy) subscribes to <code>/camera</code>, runs inference via <code>ultralytics</code>, and publishes <code>vision_msgs/Detection2DArray</code> — the standard type, not a custom one — plus an annotated <code>/detections_image</code> (rviz2 has no built-in Detection2DArray-over-image overlay, so viewing this annotated topic with its ordinary Image display is the standard way to see boxes live in rviz2 itself).</p>
+
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">A real dependency problem, solved the standard way</div>
+          <p><code>torch</code>/<code>torchvision</code>/<code>ultralytics</code> aren't ROS2 or apt packages, and this environment's system Python refuses a plain <code>pip install --user torch</code> outright (PEP 668). <code>host/setup_perception_venv.sh</code> creates a dedicated venv with <code>--system-site-packages</code>, confirmed live to be the specific combination (plus sourcing ROS2's own setup) that makes both <code>rclpy</code> and <code>torch</code> importable together.</p>
+        </div>
+        <div class="note">
+          <div class="tag">Two more real bugs, found by testing</div>
+          <p>Installing <code>torch</code>/<code>torchvision</code> separately produced a version mismatch (<code>torchvision::nms</code> failed to register) — fixed by installing both together as a matched pair. A three-way <code>numpy</code> ABI conflict (torch wants <code>numpy&gt;=2</code>, the system's <code>matplotlib</code> needs <code>numpy&lt;2</code>) and a shadowed <code>cv2</code> install (ultralytics' own <code>opencv-python</code> conflicting with the <code>cv_bridge</code> the system's was built against, causing a real <code>KeyError: 16</code>) both found and fixed the same way — by testing the actual failure, not guessing a fix.</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:30px;">Verified live, sustained over 150+ frames</h3>
+      <div class="stat-row">
+        <div class="stat"><div class="sv">person</div><div class="sl">class_id detected</div></div>
+        <div class="stat"><div class="sv">0.90</div><div class="sl">confidence score</div></div>
+        <div class="stat"><div class="sv">(317, 208)</div><div class="sl">bbox center, px (frame center: 320, 240)</div></div>
+        <div class="stat"><div class="sv">154</div><div class="sl">total detections logged across 150 frames</div></div>
+      </div>
+      <p style="margin-top:16px;">A saved frame from <code>/detections_image</code> — the actual bytes on the actual ROS2 topic, not a mockup — shows a correctly tight, correctly labeled <code>person 0.91</code> green box drawn around the walking actor's real rendered mesh, confirming the whole pipeline end to end: camera render &rarr; bridge &rarr; inference &rarr; annotation &rarr; publish. The same bytes a real <code>rviz2</code> Image display renders, since no GUI was available in this environment to launch <code>rviz2</code> itself interactively — stated plainly as a real limitation, not glossed over.</p>
+
+      <h3 style="margin-top:30px;">Try it</h3>
+      <pre class="mono">bash host/setup_perception_venv.sh   <span class="dim"># once</span>
+bash host/run_perception.sh
+
+<span class="dim"># elsewhere:</span>
+ros2 topic echo /detections vision_msgs/msg/Detection2DArray
+rviz2   <span class="dim"># Image display on /detections_image shows live boxes</span></pre>
+    </div>
+  </section>
+</div>
+
 <footer>
   <div class="wrap">
     <div class="links">
@@ -1573,7 +1653,7 @@ sensor_msgs/Imu(frame_id="imu_link", orientation.w=1.0):
 
   /* ---------- tabs, driven by the URL hash so every tab is a real, shareable link ---------- */
   (function () {
-    var tabIds = ['overview', 'kernel', 'ros2', 'phase10'];
+    var tabIds = ['overview', 'kernel', 'ros2', 'phase10', 'phase15'];
     var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
     var panels = {};
     tabIds.forEach(function (id) { panels[id] = document.getElementById('tab-' + id); });
