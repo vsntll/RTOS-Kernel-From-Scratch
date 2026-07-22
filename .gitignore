@@ -17,3 +17,8 @@ obj/
 # Python bytecode cache (host/*.py fault-injection tools)
 __pycache__/
 *.pyc
+
+# pretrained model weights (host/perception_node.py, Phase 15) -- auto-
+# downloaded by ultralytics on first run into whatever the CWD was, not
+# something to check in
+*.pt

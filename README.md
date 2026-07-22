@@ -647,6 +647,48 @@ genuine physics responding to genuine RTOS-published commands, not a
 screenshot standing in for it. Full account, including the exact CDR bug
 and every byte comparison, in `xrce/docs/design.md`'s Phase 14 section.
 
+### Part 4 — Perception layer (Phase 15)
+
+Phase 14 proved this RTOS's own commands control real physics. This part
+adds the other direction: real perception, feeding real, standard ROS2
+messages any tool can consume — the prerequisite for anything built on
+top of it later.
+
+**Phase 15 — a real camera, a real pretrained detector, real standard
+messages.** `host/gazebo/diff_drive_camera.sdf` (a project-owned copy of
+gz-sim's own bundled `diff_drive.sdf`, not an edit of the vendor file) adds
+a front-facing camera sensor to `vehicle_blue`'s chassis and a walking
+person actor (a real animated mesh, not a primitive shape — a box never
+triggers a "person" class) for a pretrained detector to have something
+genuine to recognize. Bridged to real `sensor_msgs/Image`/`CameraInfo`
+topics by an unmodified `ros_gz_bridge`, same tool Phase 14 already uses.
+`host/perception_node.py` runs YOLOv8n ("nano"), pretrained on COCO and
+used exactly as-is — no fine-tuning, the same "real, unmodified" bar this
+project holds the agent and Gazebo bridge to — and publishes
+`vision_msgs/Detection2DArray`, the standard type for this, not a custom
+one, plus an annotated `/detections_image` (rviz2 has no built-in
+Detection2DArray-over-image display, so viewing this annotated topic
+directly is the standard way to see boxes overlaid in rviz2 itself).
+Getting the non-ROS Python dependencies (`torch`/`torchvision`/
+`ultralytics`) installed needed a dedicated venv (`host/
+setup_perception_venv.sh`) — this WSL image's system Python refuses a
+plain `pip install --user` outright (PEP 668) — and surfaced two more
+real bugs along the way: installing `torch`/`torchvision` in separate
+steps produced a version mismatch (`torchvision::nms` failed to
+register), and a three-way `numpy` ABI conflict between `torch` (wants
+`numpy>=2`) and the system's `matplotlib` (needs `numpy<2`, pulled in
+transitively by `ultralytics` even for pure inference). Both fixed by
+testing the actual combination that works (matched torch/torchvision
+pair, `numpy<2`), not by guessing version numbers. **Verified live**:
+sustained over 150+ consecutive frames, real `vision_msgs/Detection2DArray`
+messages showing `class_id: person`, `score: 0.90`, a sensible bounding
+box roughly centered in the 640x480 frame — and a saved frame from
+`/detections_image` shows a correctly tight, correctly labeled
+`person 0.91` box drawn around the actor's real rendered mesh, the same
+bytes a real `rviz2` Image display would render. Full account, including
+both dependency bugs and the exact numbers, in `xrce/docs/design.md`'s
+Phase 15 section.
+
 ## Project structure
 
 ```
@@ -706,6 +748,10 @@ host/                        # host-side scripts and live-agent test programs
   bench_latency.c             # Phase 6: real host<->RTOS round-trip latency + burst-loss benchmark
   bench_microros.py           # Phase 13: same round-trip benchmark against real, official micro-ROS
   bench_qos.c                 # Phase 7c: reliable-vs-best-effort delivery under induced loss
+  gazebo/diff_drive_camera.sdf # Phase 15: diff_drive.sdf + a camera sensor + a walking-person actor
+  setup_perception_venv.sh    # Phase 15: one-time venv setup for torch/torchvision/ultralytics
+  perception_node.py          # Phase 15: YOLOv8n -> vision_msgs/Detection2DArray + annotated image
+  run_perception.sh           # Phase 15: boots the camera world + bridge + perception node together
 ```
 
 ## Kernel API (summary)
@@ -817,6 +863,17 @@ Phase 9. These five go past it:
       byte-for-byte identical to real `rclpy` serialization for both
       `Imu` and `Twist`); verified live via substantial, continuous
       odometry change (position and orientation) over 20 seconds
+
+### Part 4 — Perception layer
+
+- [x] Phase 15 — Real camera sensor + real pretrained YOLOv8n detector:
+      verified live over 150+ consecutive frames, real
+      `vision_msgs/Detection2DArray` messages (`class_id: person,
+      score: 0.90`, sensible bounding box) from a real walking-actor
+      mesh in a real Gazebo camera feed, bridged by an unmodified
+      `ros_gz_bridge`; a saved `/detections_image` frame confirms a
+      correctly drawn, correctly labeled box (the same bytes a real
+      `rviz2` Image display renders)
 
 ## Troubleshooting
 
