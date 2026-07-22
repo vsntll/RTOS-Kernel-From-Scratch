@@ -13,31 +13,52 @@
  * platform (x86_64, aarch64, and Cortex-M under QEMU) actually uses; a
  * real client never needs to emit CDR_BE.
  *
- * Alignment: each primitive is padded so its start offset, measured from
- * the very beginning of the buffer (i.e. including the 4-byte header,
- * which counts as already-consumed alignment), is a multiple of the
- * primitive's own size (1/2/4/8). This matches Fast-CDR's behavior, which
- * is what a real ROS2 node's DDS participant is actually running --
- * getting this wrong produces bytes a real subscriber silently
- * misinterprets rather than rejects, so it's exactly the kind of detail
- * worth stating explicitly rather than leaving implicit. */
+ * Alignment: each primitive is padded so its start offset is a multiple of
+ * the primitive's own size (1/2/4/8), measured from `align_base` -- 0 for
+ * a plain writer/reader, or the position right after the 4-byte header
+ * for one that called xrce_cdr_write_header()/xrce_cdr_read_header().
+ * This matches Fast-CDR's actual behavior (confirmed against real
+ * `rclpy.serialization.serialize_message()` output, not assumed): the
+ * encapsulation header does NOT count toward subsequent field alignment,
+ * i.e. the first field after it is treated as starting at a fresh offset
+ * 0, not at absolute offset 4. An earlier version of this comment (and
+ * this file's code) claimed the opposite -- that the header's 4 bytes
+ * count as already-consumed alignment -- which is wrong and went
+ * undetected because it happened to not matter for every message type
+ * this project had live-verified so far (std_msgs/Int32, trivially;
+ * sensor_msgs/Imu was CDR-tested but never live-verified against a real
+ * subscriber). Phase 14's geometry_msgs/Twist -- header immediately
+ * followed by a float64, the simplest case where the two schemes
+ * actually disagree -- surfaced it: a real ROS2 subscriber's RTPS reader
+ * rejected every sample with "payload size of '56' bytes is larger than
+ * the history payload size of '55'" (its own generated typesupport
+ * expects 52; see xrce/docs/design.md's Phase 14 section for the byte-
+ * for-byte comparison against a captured real `rclpy`-serialized Twist).
+ * Fixed here, in the one shared place both Imu and Twist (and any future
+ * message type) go through, rather than worked around per call site. */
 
 typedef struct {
     uint8_t *buf;
     size_t cap;
     size_t pos;
+    size_t align_base;
 } xrce_cdr_writer_t;
 
 typedef struct {
     const uint8_t *buf;
     size_t len;
     size_t pos;
+    size_t align_base;
 } xrce_cdr_reader_t;
 
 void xrce_cdr_writer_init(xrce_cdr_writer_t *w, uint8_t *buf, size_t cap);
-/* Writes the 4-byte CDR_LE encapsulation header ([0x00, 0x01, 0x00, 0x00]).
- * Must be the first thing written -- every alignment calculation after
- * this assumes it's present. */
+/* Writes the 4-byte CDR_LE encapsulation header ([0x00, 0x01, 0x00, 0x00])
+ * and resets align_base to right after it, so every alignment calculation
+ * after this treats that point as offset 0 -- must be the first thing
+ * written if it's called at all. Callers that never call this (e.g.
+ * session.c's message/submessage headers, a different framing layer with
+ * its own, unrelated header) keep align_base at 0 from _init(), unaffected
+ * by this. */
 bool xrce_cdr_write_header(xrce_cdr_writer_t *w);
 
 bool xrce_cdr_write_bool(xrce_cdr_writer_t *w, bool v);
