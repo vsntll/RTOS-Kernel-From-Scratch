@@ -569,6 +569,47 @@ own regression harness already applies to the kernel:
 Full transcripts and the exact numbers for all three, in
 `xrce/docs/design.md`'s Phase 12 section.
 
+**Phase 14 — Gazebo: this RTOS is literally the control firmware for a
+simulated vehicle with real physics.** `rtos/arm/gazebo_demo.c` publishes
+`geometry_msgs/Twist` on `/model/vehicle_blue/cmd_vel` -- the exact topic
+gz-sim's own bundled `diff_drive.sdf` world documents as the way to drive
+it -- bridged by a real, unmodified `ros_gz_bridge parameter_bridge`, the
+same "real, unmodified" bar this project already holds the XRCE-DDS agent
+to. Added `geometry_msgs/Twist` CDR support (`xrce/src/msgs.c`, reusing
+the same `write_vec3()`/`read_vec3()` helpers `sensor_msgs/Imu` already
+exercises) -- and along the way, testing it **live against a real ROS2
+subscriber for the first time for any message type built on those
+helpers**, found a real bug in this project's shared CDR alignment code
+that had been latent since Phase 2: `xrce/src/cdr.c` aligned fields
+relative to the buffer's absolute start (counting the 4-byte
+encapsulation header as already-consumed alignment), but real Fast-CDR
+resets alignment to 0 right after that header. `sensor_msgs/Imu` was
+never live-verified end-to-end before (CDR-tested only), so this had
+gone undetected; `geometry_msgs/Twist` (header immediately followed by a
+`float64`) is the simplest case where the two schemes disagree, and a
+real RTPS reader's rejection (`payload size of '56' bytes is larger than
+the history payload size of '55'`) caught it immediately. Fixed in the
+one shared place (`xrce/src/cdr.c`'s new `align_base`) rather than worked
+around per message type, then verified **byte-for-byte identical** to a
+real `rclpy.serialization.serialize_message()` capture for both
+`sensor_msgs/Imu` and `geometry_msgs/Twist` -- not just "it round-trips"
+but literally the same bytes a real ROS2 node would produce. Also found
+and fixed, the same way: a `msg[192]` buffer too small for the longer
+`cmd_vel` datawriter XML (the exact class of bug `ros2_demo.c`'s own
+header comment already documents), and a publish-pacing loop that,
+lacking any MMIO access (unlike `ros2_demo.c`'s own pacing, which
+incidentally polls a real UART register), ran at ~4800 Hz under QEMU's
+uncalibrated TCG timing -- confirmed live via `ros2 topic hz`, not
+assumed. **Verified live**: with a headless (`gz sim -s`) `diff_drive.sdf`
+world, the real bridge, QEMU-booted firmware, and a real unmodified
+agent all running together, the simulated vehicle's own odometry showed
+substantial, continuous position change (`(0.23, 0.05)` ->
+`(-0.39, 0.81)` -> `(0.10, 0.99)` over 20 seconds) and a real orientation
+change (quaternion `z=0.996, w=0.090`, roughly a 174-degree turn) --
+genuine physics responding to genuine RTOS-published commands, not a
+screenshot standing in for it. Full account, including the exact CDR bug
+and every byte comparison, in `xrce/docs/design.md`'s Phase 14 section.
+
 ## Project structure
 
 ```
@@ -594,7 +635,8 @@ rtos/
     design.md              # architecture + internals writeup, including Phase 8 notes
   arm/                      # Phase 8: Cortex-M4 port, boots under QEMU/Renode (own README/Makefile)
     ros2_demo.c              # Phase 4: xrce/ session layer over UART1, `make ros2_demo`
-    libc_shim.c              # minimal memcpy/strlen for the freestanding ros2_demo build
+    gazebo_demo.c            # Phase 14: publishes Twist to drive a simulated vehicle, `make gazebo_demo`
+    libc_shim.c              # minimal memcpy/memset/strlen for the freestanding demo builds
   Makefile
 
 xrce/                       # Micro XRCE-DDS client layer (Option A), portable/OS-independent
@@ -711,6 +753,12 @@ top of the kernel above, not part of it:**
       data; 2% never crashes/hangs, just slower), and a task crash
       mid-publish tied into `/rtos/diagnostics` (fail-safe halt verified,
       last diagnostics snapshot confirmed coherent)
+- [x] Phase 14 — Gazebo: RTOS firmware drives a simulated vehicle's
+      diff-drive plugin via a real, unmodified `ros_gz_bridge`; found and
+      fixed a real latent CDR alignment bug along the way (verified
+      byte-for-byte identical to real `rclpy` serialization for both
+      `Imu` and `Twist`); verified live via substantial, continuous
+      odometry change (position and orientation) over 20 seconds
 
 ## Troubleshooting
 
