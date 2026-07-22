@@ -13,3 +13,7 @@ obj/
 .vscode/
 *.swp
 .DS_Store
+
+# Python bytecode cache (host/*.py fault-injection tools)
+__pycache__/
+*.pyc
