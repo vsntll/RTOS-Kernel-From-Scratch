@@ -103,6 +103,26 @@ bool sensor_msgs_Imu_decode(const uint8_t *buf, size_t len, sensor_msgs_Imu *out
            read_cov(&r, out->linear_acceleration_covariance);
 }
 
+bool geometry_msgs_Twist_encode(const geometry_msgs_Twist *msg, uint8_t *buf, size_t cap,
+                                 size_t *out_len) {
+    xrce_cdr_writer_t w;
+    xrce_cdr_writer_init(&w, buf, cap);
+
+    if (!xrce_cdr_write_header(&w) || !write_vec3(&w, &msg->linear) ||
+        !write_vec3(&w, &msg->angular)) {
+        return false;
+    }
+    *out_len = w.pos;
+    return true;
+}
+
+bool geometry_msgs_Twist_decode(const uint8_t *buf, size_t len, geometry_msgs_Twist *out) {
+    xrce_cdr_reader_t r;
+    xrce_cdr_reader_init(&r, buf, len);
+
+    return xrce_cdr_read_header(&r) && read_vec3(&r, &out->linear) && read_vec3(&r, &out->angular);
+}
+
 bool std_srvs_Trigger_Request_encode(const std_srvs_Trigger_Request *msg, uint8_t *buf, size_t cap,
                                       size_t *out_len) {
     (void)msg;
