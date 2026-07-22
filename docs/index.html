@@ -359,6 +359,57 @@
   .legend i.ready { background: var(--accent-2); opacity: 0.55; }
   .legend i.blocked { background: var(--accent-3); opacity: 0.55; }
 
+  /* ---------- Part 1's signature visual: priority inheritance,
+     before/after, real tick counts from an actual run of
+     rtos/examples/priority_inversion_demo.c (not illustrative like the
+     hero figure -- see that visual's own caption for the distinction).
+     Both bars share one 0-100-tick scale, so the "with inheritance" bar
+     visibly stopping at 59% is the whole point: HIGH really does finish
+     that much sooner. ---------- */
+  .pc-wrap { margin-top: 20px; }
+  .pc-row { margin-bottom: 18px; }
+  .pc-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-family: "IBM Plex Mono", monospace; }
+  .pc-title { font-size: 0.8rem; color: var(--ink); font-weight: 600; }
+  .pc-result { font-size: 0.78rem; color: var(--ink-dim); }
+  .pc-track { position: relative; height: 22px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 2px; overflow: visible; }
+  .pc-seg { position: absolute; top: 0; bottom: 0; }
+  .pc-seg.pc-low { background: var(--accent-2); opacity: 0.5; }
+  .pc-seg.pc-blocked { background: var(--accent-3); opacity: 0.6; }
+  .pc-seg.pc-running { background: var(--accent); }
+  .pc-marker { position: absolute; top: -18px; bottom: -4px; width: 1px; background: var(--ink-faint); }
+  .pc-marker::after { content: attr(data-label); position: absolute; top: -14px; left: 4px; font-family: "IBM Plex Mono", monospace; font-size: 0.62rem; color: var(--ink-faint); white-space: nowrap; }
+  .pc-axis { display: flex; justify-content: space-between; margin-top: 4px; font-family: "IBM Plex Mono", monospace; font-size: 0.62rem; color: var(--ink-faint); }
+
+  /* ---------- Part 2's signature visual: the protocol stack.
+     Color encodes provenance, not just layer identity: this project's
+     own code (accent) vs. an unmodified real dependency it talks to
+     (accent-2) -- the whole point of Part 2 is that the accent layers
+     interoperate with the accent-2 ones without the agent or rclpy
+     knowing this isn't a real micro-ROS board. ---------- */
+  .stack-wrap { margin-top: 20px; max-width: 560px; }
+  .stack-layer { position: relative; border: 1px solid var(--line-strong); border-left-width: 4px; background: var(--surface); box-shadow: var(--shadow); padding: 10px 14px; margin-bottom: 2px; }
+  .stack-layer.mine { border-left-color: var(--accent); }
+  .stack-layer.real { border-left-color: var(--accent-2); }
+  .stack-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .stack-name { font-family: "IBM Plex Mono", monospace; font-size: 0.82rem; font-weight: 600; color: var(--ink); }
+  .stack-badge { font-family: "IBM Plex Mono", monospace; font-size: 0.6rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-faint); white-space: nowrap; }
+  .stack-detail { font-size: 0.78rem; color: var(--ink-dim); margin-top: 3px; }
+  .stack-arrow { display: flex; justify-content: center; font-family: "IBM Plex Mono", monospace; font-size: 0.75rem; color: var(--ink-faint); line-height: 1; margin: 1px 0; }
+  .stack-legend { display: flex; gap: 18px; margin-top: 14px; flex-wrap: wrap; font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; color: var(--ink-dim); }
+  .stack-legend .sw { display: inline-flex; align-items: center; gap: 6px; }
+  .stack-legend i { width: 12px; height: 12px; display: inline-block; border-radius: 1px; }
+  .stack-legend i.mine { background: var(--accent); }
+  .stack-legend i.real { background: var(--accent-2); }
+
+  /* ---------- Part 3's signature visual: N boards fanning into
+     one real agent process (Phase 10) -- the literal topology
+     host/run_multi_node.sh boots, not a metaphor. ---------- */
+  .fanin-wrap { display: flex; align-items: center; margin-top: 20px; gap: 2px; }
+  .fanin-boards { display: flex; flex-direction: column; gap: 14px; }
+  .fanin-node { min-width: 108px; padding: 10px 12px; }
+  .fanin-svg { flex: none; width: 90px; height: 140px; }
+  .fanin-line { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
+
   /* ---------- overview (pipeline + cards) ---------- */
   .pipeline { margin: 32px 0 8px; }
   .pipeline-track { display: flex; align-items: center; }
@@ -869,6 +920,42 @@
         <a href="#field-notes">Field notes</a>
         <a href="#run">Run it</a>
       </div>
+
+      <div class="pc-wrap" aria-hidden="true">
+        <div class="scope-head">
+          <span class="fig">FIG. 2 — PRIORITY INHERITANCE, BEFORE/AFTER</span>
+          <span class="caption">a real run of priority_inversion_demo, same 0&ndash;100-tick scale for both bars</span>
+        </div>
+        <div class="pc-row">
+          <div class="pc-head">
+            <span class="pc-title">WITHOUT INHERITANCE</span>
+            <span class="pc-result">high finished after 100 ticks</span>
+          </div>
+          <div class="pc-track">
+            <div class="pc-seg pc-low" style="left:0; width:2%;"></div>
+            <div class="pc-seg pc-blocked" style="left:2%; width:95%;"></div>
+            <div class="pc-seg pc-running" style="left:97%; width:3%;"></div>
+            <div class="pc-marker" style="left:40%;" data-label="medium gives up, 40 ticks"></div>
+          </div>
+        </div>
+        <div class="pc-row" style="margin-bottom:6px;">
+          <div class="pc-head">
+            <span class="pc-title">WITH INHERITANCE</span>
+            <span class="pc-result">high finished after 59 ticks</span>
+          </div>
+          <div class="pc-track" style="width:59%;">
+            <div class="pc-seg pc-low" style="left:0; width:3%;"></div>
+            <div class="pc-seg pc-blocked" style="left:3%; width:92%;"></div>
+            <div class="pc-seg pc-running" style="left:95%; width:5%;"></div>
+          </div>
+        </div>
+        <div class="pc-axis"><span>0</span><span>20</span><span>40</span><span>60</span><span>80</span><span>100 ticks</span></div>
+        <div class="legend" style="margin-top:10px;">
+          <span class="sw"><i class="ready"></i>LOW holds the mutex</span>
+          <span class="sw"><i class="blocked"></i>HIGH blocked, waiting for it</span>
+          <span class="sw"><i class="running"></i>HIGH runs and finishes</span>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -1060,6 +1147,46 @@ make examples
         <a href="#p7a">Phase 7 · Deepen the middleware</a>
         <a href="#phase8">Phase 8 · Diagnostics</a>
         <a href="#phase9">Phase 9 · Live TUI</a>
+      </div>
+
+      <div class="stack-wrap" aria-hidden="true">
+        <div class="scope-head">
+          <span class="fig">FIG. 3 — THE PROTOCOL STACK</span>
+          <span class="caption">color = who owns the code, not which layer it is</span>
+        </div>
+        <div class="stack-layer real">
+          <div class="stack-row"><span class="stack-name">rclpy / ros2 CLI / rviz2</span><span class="stack-badge">unmodified ROS2</span></div>
+          <div class="stack-detail">has no idea the other end is QEMU, not a real board</div>
+        </div>
+        <div class="stack-arrow">&#8595;&#8593;</div>
+        <div class="stack-layer real">
+          <div class="stack-row"><span class="stack-name">MicroXRCEAgent</span><span class="stack-badge">unmodified, built from source</span></div>
+          <div class="stack-detail">real eProsima binary — DDS participant, topic, DataWriter/Reader</div>
+        </div>
+        <div class="stack-arrow">&#8595;&#8593;</div>
+        <div class="stack-layer mine">
+          <div class="stack-row"><span class="stack-name">XRCE-DDS session layer</span><span class="stack-badge">xrce/src/session.c</span></div>
+          <div class="stack-detail">CREATE_CLIENT · CREATE · WRITE_DATA · READ_DATA · DELETE</div>
+        </div>
+        <div class="stack-arrow">&#8595;&#8593;</div>
+        <div class="stack-layer mine">
+          <div class="stack-row"><span class="stack-name">CDR serialization</span><span class="stack-badge">xrce/src/cdr.c</span></div>
+          <div class="stack-detail">alignment-aware, byte-exact against real <code>rclpy</code> output</div>
+        </div>
+        <div class="stack-arrow">&#8595;&#8593;</div>
+        <div class="stack-layer mine">
+          <div class="stack-row"><span class="stack-name">Serial framing + CRC-16/ARC</span><span class="stack-badge">xrce/src/transport.c</span></div>
+          <div class="stack-detail">byte-stuffed, matches reference client's actual (not documented) framing</div>
+        </div>
+        <div class="stack-arrow">&#8595;&#8593;</div>
+        <div class="stack-layer real">
+          <div class="stack-row"><span class="stack-name">UART over emulated serial / real serial-USB</span><span class="stack-badge">QEMU or hardware</span></div>
+          <div class="stack-detail">this project's firmware runs unmodified on real Cortex-M4 hardware too</div>
+        </div>
+        <div class="stack-legend">
+          <span class="sw"><i class="mine"></i>this project's code</span>
+          <span class="sw"><i class="real"></i>real, unmodified dependency</span>
+        </div>
       </div>
 
       <h3 style="margin-top:30px;" id="p0-6">What's implemented</h3>
@@ -1419,6 +1546,21 @@ python3 host/rtos_top.py   <span class="dim"># q to quit</span></pre>
         <a href="#p13">13 · micro-ROS benchmark</a>
         <a href="#p14">14 · Gazebo</a>
       </div>
+
+      <div class="fanin-wrap" aria-hidden="true">
+        <div class="fanin-boards">
+          <div class="pnode fanin-node"><span class="pn-label">BOARD 1</span><span class="pn-sub">QEMU · NODE_ID=1</span></div>
+          <div class="pnode fanin-node"><span class="pn-label">BOARD 2</span><span class="pn-sub">QEMU · NODE_ID=2</span></div>
+          <div class="pnode fanin-node"><span class="pn-label">BOARD 3</span><span class="pn-sub">QEMU · NODE_ID=3</span></div>
+        </div>
+        <svg class="fanin-svg" viewBox="0 0 120 140" preserveAspectRatio="none">
+          <path class="fanin-line" d="M0,20 C60,20 60,70 120,70"></path>
+          <path class="fanin-line" d="M0,70 L120,70"></path>
+          <path class="fanin-line" d="M0,120 C60,120 60,70 120,70"></path>
+        </svg>
+        <div class="pnode pnode-hub fanin-node"><span class="pn-label">1 AGENT</span><span class="pn-sub">multiserial, one process</span></div>
+      </div>
+      <p style="margin-top:10px; font-size:0.78rem; color:var(--ink-dim);">FIG. 4 — 3 real QEMU boards, 3 independent counters, 1 unmodified <code>MicroXRCEAgent</code> process demuxing all of them</p>
     </div>
   </section>
 
@@ -1564,6 +1706,24 @@ sensor_msgs/Imu(frame_id="imu_link", orientation.w=1.0):
       <div class="label" style="margin-bottom:8px;">PART 4 · PHASE 15</div>
       <div class="section-head"><span class="num">15</span><h2>Perception layer<span class="status-pill">verified live, real bounding box</span></h2></div>
       <p class="lede">Phase 14 proved this RTOS's own commands control real physics. This phase adds the other direction: a real camera on the simulated vehicle, and a real pretrained object detector consuming its feed, publishing standard ROS2 detection messages any real tool can consume — the prerequisite almost everything else in this direction builds on.</p>
+
+      <div class="pipeline" aria-hidden="true">
+        <div class="scope-head">
+          <span class="fig">FIG. 5 — THE PERCEPTION PIPELINE</span>
+          <span class="caption">every arrow is a real ROS2 topic, checked live end to end</span>
+        </div>
+        <div class="pipeline-track">
+          <div class="pnode"><span class="pn-label">GAZEBO CAMERA</span><span class="pn-sub">640×480 · 60&deg; FOV</span></div>
+          <div class="pline"><span class="pdot"></span></div>
+          <div class="pnode pnode-hub"><span class="pn-label">ros_gz_bridge</span><span class="pn-sub">real · unmodified</span></div>
+          <div class="pline"><span class="pdot" style="animation-delay:0.8s"></span></div>
+          <div class="pnode"><span class="pn-label">/camera</span><span class="pn-sub">sensor_msgs/Image</span></div>
+          <div class="pline"><span class="pdot" style="animation-delay:1.6s"></span></div>
+          <div class="pnode"><span class="pn-label">YOLOv8n</span><span class="pn-sub">host/perception_node.py</span></div>
+          <div class="pline"><span class="pdot" style="animation-delay:2.4s"></span></div>
+          <div class="pnode"><span class="pn-label">/detections</span><span class="pn-sub">vision_msgs/Detection2DArray</span></div>
+        </div>
+      </div>
 
       <div class="grid-2" style="margin-top:20px;">
         <div>
