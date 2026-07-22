@@ -370,7 +370,7 @@
     100% { left: calc(100% - 8px); opacity: 0; }
   }
 
-  .overview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 28px; }
+  .overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 28px; }
   .overview-card { display: flex; gap: 16px; padding: 20px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
   .oc-icon {
     flex: none;
@@ -623,6 +623,7 @@
     <a class="tab" href="#phase7" data-tab="phase7"><span class="tab-n">03</span>Phase 7</a>
     <a class="tab" href="#phase8" data-tab="phase8"><span class="tab-n">04</span>Diagnostics</a>
     <a class="tab" href="#phase9" data-tab="phase9"><span class="tab-n">05</span>Live TUI</a>
+    <a class="tab" href="#phase10" data-tab="phase10"><span class="tab-n">06</span>Phases 10–14</a>
   </nav>
 </div>
 
@@ -695,14 +696,16 @@
 
   <section class="no-rule">
     <div class="wrap">
-      <div class="label" style="margin-bottom:8px;">TWO PARTS, ONE SYSTEM</div>
+      <div class="label" style="margin-bottom:8px;">THREE PARTS, ONE SYSTEM</div>
       <h2 style="font-size:1.6rem;">What's actually here, at a glance</h2>
       <p class="lede" style="margin-top:10px;">
-        A kernel that schedules tasks, and a client layer that lets those tasks talk to ROS2 —
-        built as two separate, independently-testable pieces, then wired together and pushed
-        well past "pub/sub demo" into a credible middleware implementation: services, actions,
+        A kernel that schedules tasks, a client layer that lets those tasks talk to ROS2, and a
+        set of phases that push past a single happy-path demo — built as independently-testable
+        pieces, then wired together into a credible middleware implementation: services, actions,
         QoS that actually changes transport behavior under real loss, priority-aware dispatch,
-        live diagnostics, and a live TUI. Each tab above is one part of that; this page is the map.
+        live diagnostics, a live TUI, multiple boards under one agent, an authenticated link,
+        systematic fault injection, a real benchmark against official micro-ROS, and a simulated
+        vehicle this RTOS actually controls. Each tab above is one part of that; this page is the map.
       </p>
 
       <div class="pipeline" aria-hidden="true">
@@ -742,6 +745,19 @@
             <a class="oc-link" href="#ros2" data-tab-link="ros2">ROS2 layer details ↓</a>
           </div>
         </div>
+        <div class="overview-card">
+          <div class="oc-icon" aria-hidden="true"><span class="bar"></span><span class="bar"></span><span class="bar"></span></div>
+          <div class="oc-body">
+            <div class="label" style="color:var(--accent);">PART 3</div>
+            <h3>Pushing past the brief</h3>
+            <p>Multiple boards sharing one real agent, an HMAC-authenticated link with live
+            wrong-key rejection, systematic fault injection with real pass/fail results, a real
+            benchmark against official micro-ROS, and this RTOS driving a simulated vehicle's
+            real physics through an unmodified Gazebo bridge.</p>
+            <div class="oc-stats">Phases 10–14 complete · multi-node, security, fault injection, benchmark, Gazebo</div>
+            <a class="oc-link" href="#phase10" data-tab-link="phase10">Phases 10–14 details ↓</a>
+          </div>
+        </div>
       </div>
 
       <div class="jump-grid">
@@ -759,6 +775,11 @@
           <div class="jt-n">PHASE 9</div>
           <div class="jt-t">Live terminal UI</div>
           <div class="jt-d"><code>htop</code>-style view over the diagnostics topic, verified with a real captured screen</div>
+        </a>
+        <a class="jump-tile" href="#phase10" data-tab-link="phase10">
+          <div class="jt-n">PHASES 10–14</div>
+          <div class="jt-t">Multi-node, security, fault injection, benchmark, Gazebo</div>
+          <div class="jt-d">N boards under one agent, HMAC-authenticated link, live corruption/crash testing, a real micro-ROS comparison, and real physics driven by this RTOS</div>
         </a>
       </div>
     </div>
@@ -1314,6 +1335,163 @@ python3 host/rtos_top.py   <span class="dim"># q to quit</span></pre>
   </section>
 </div>
 
+<!-- ============================== TAB: PHASES 10-14 ============================== -->
+<div class="tab-panel" id="tab-phase10">
+  <section class="no-rule">
+    <div class="wrap" style="padding-top:36px;">
+      <div class="label" style="margin-bottom:8px;">PART 3 · PHASES 10–14</div>
+      <h2 style="font-size:1.6rem;">Push the engineering further<span class="status-pill">10–14 complete</span></h2>
+      <p class="lede" style="margin-top:10px;">
+        Phase 9 finished every phase in the original brief. These five go past it: N boards
+        sharing one real agent, a real authenticated link, systematic fault injection, a real
+        comparison against official micro-ROS, and a simulated vehicle whose physics this
+        RTOS actually controls — each verified live against the real thing, not simulated.
+      </p>
+      <div class="subnav">
+        <a href="#p10">10 · Multi-node</a>
+        <a href="#p11">11 · Security</a>
+        <a href="#p12">12 · Fault injection</a>
+        <a href="#p13">13 · micro-ROS benchmark</a>
+        <a href="#p14">14 · Gazebo</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="p10">
+    <div class="wrap">
+      <div class="section-head"><span class="num">10</span><h2>Multi-node scaling<span class="status-pill">verified live, 3 boards</span></h2></div>
+      <p class="lede">N separately-built firmware images, each booted under its own QEMU instance, all appearing as N distinct ROS2 nodes to <strong>one</strong> real agent process — not N agent processes, and not a custom host-side relay.</p>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">The agent already does the hard part</div>
+          <p>The real agent's <code>multiserial</code> transport mode natively demuxes multiple clients on one process — existing eProsima behavior, not something this project builds. The work was parametrizing <code>client_key</code>, participant name, and every topic name by a build-time <code>NODE_ID</code> (default 0, so a plain <code>make ros2_demo</code> stays byte-identical to every earlier phase).</p>
+        </div>
+        <div class="note">
+          <div class="tag">A real agent-CLI gotcha, found by testing</div>
+          <p>The obvious <code>-D /dev/pts/3 -D /dev/pts/4</code> (repeated flag) and <code>-D /dev/pts/3,/dev/pts/4</code> (comma-separated) both fail silently. Reading the agent's own argument parser showed why: <code>multiserial</code>'s <code>-D</code> wants <strong>one</strong> shell argument, space-separated — <code>-D "/dev/pts/3 /dev/pts/4"</code>.</p>
+        </div>
+      </div>
+      <p style="margin-top:16px;">Verified with 3 simultaneous QEMU boards under one agent: all 9 expected topics present with zero collisions, two boards' counters confirmed <em>independently</em> incrementing, and a <code>ros2 topic pub /setpoint_1 ...</code> confirmed echoed on <code>/pong_1</code> and <strong>absent</strong> from <code>/pong_2</code> — ruling out both the agent merging same-named entities and this project's firmware misrouting a datareader.</p>
+      <pre class="mono">$ ros2 topic list
+/chatter_1  /chatter_2  /chatter_3
+/setpoint_1 /setpoint_2 /setpoint_3
+/pong_1     /pong_2     /pong_3
+
+$ ros2 topic echo /chatter_2 --once   &amp;&amp;   ros2 topic echo /chatter_3 --once
+data: 880
+data: 962   <span class="dim"># genuinely independent counters, not a shared/duplicated stream</span></pre>
+      <p style="margin-top:12px;"><code>host/run_multi_node.sh</code> builds N firmware variants, boots N QEMU instances each on its own pty, and points one <code>MicroXRCEAgent multiserial</code> at all of them.</p>
+    </div>
+  </section>
+
+  <section id="p11">
+    <div class="wrap">
+      <div class="section-head"><span class="num">11</span><h2>Security: HMAC-authenticated link<span class="status-pill">wrong-key rejection proven live</span></h2></div>
+      <p class="lede">Real industrial/automotive micro-ROS deployments need authentication on the wire. Every earlier phase's firmware sent completely unauthenticated XRCE-DDS frames — indistinguishable from a bare, unsecured board.</p>
+      <div class="grid-2" style="margin-top:20px;">
+        <div>
+          <div class="col-head">Built from scratch, checked against the spec's own vectors</div>
+          <ul>
+            <li>SHA-256 (FIPS 180-4) — matches NIST's published digests, including the million-<code>'a'</code> long-message vector</li>
+            <li>HMAC-SHA256 (RFC 2104) — matches RFC 4231's official test cases, including the &gt;block-size-key path</li>
+          </ul>
+        </div>
+        <div>
+          <div class="col-head">Why the agent can't be the direct far end</div>
+          <p>Option A's whole value is zero-modification interop with a real agent. The authenticated hop only exists between firmware and a new <code>host/secure_gateway.c</code>, which verifies/strips it and forwards plain, standard XRCE-DDS on — the same trust-boundary pattern a real automotive gateway ECU uses.</p>
+        </div>
+      </div>
+      <p style="margin-top:20px;">Each frame is wrapped as <code>counter (4B) | truncated 8-byte HMAC tag | inner payload</code> — a strictly-increasing counter defeats replay; the truncated tag (an AUTOSAR-SecOC-style tradeoff) keeps overhead small. Opt-in via a <code>SECURE_LINK=1</code> build flag — default 0 keeps every earlier phase's direct-to-agent workflow untouched.</p>
+      <h3 style="margin-top:26px;">Verified live: legitimate traffic, and the actual security property</h3>
+      <pre class="mono">$ # legitimate key: same /chatter, /setpoint→/pong round trip as always, now authenticated
+$ ros2 topic pub /setpoint std_msgs/msg/Int32 "{data: 777}" --once   →   data: 777 on /pong
+
+$ # gateway started with a DIFFERENT key, firmware unchanged:
+[uplink] REJECTED frame (bad tag (corrupted in transit, or wrong key)) -- dropped
+$ ros2 topic list
+/parameter_events   /rosout        <span class="dim"># zero firmware topics ever reached the graph</span></pre>
+      <p style="margin-top:12px;">Tamper and replay rejection are covered exhaustively at the unit level (7 cases in <code>test_secure_transport.c</code>) — the same "corruption testing belongs at the unit level" precedent Phase 1 already set. Confidentiality (encryption) and runtime key exchange were explicitly scoped out, stated plainly rather than silently assumed.</p>
+    </div>
+  </section>
+
+  <section id="p12">
+    <div class="wrap">
+      <div class="section-head"><span class="num">12</span><h2>Fault injection test suite<span class="status-pill">systematic, automated, verified live</span></h2></div>
+      <p class="lede">Earlier phases found real fault-tolerance properties as side effects of chasing other bugs. This phase turns the three fault categories a real deployment needs proof against into a real, repeatable suite — the same discipline the RTOS's own regression harness already applies to the kernel.</p>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">Link killed mid-transaction — <code>host/fault_link_kill.sh</code></div>
+          <p>4 automated pass/fail assertions: baseline data flowing, firmware survives the agent being <code>SIGKILL</code>'d, a <strong>freshly-started</strong> agent against the same still-running firmware recovers automatically (the periodic re-announce from Phase 5 doing its actual job under a real kill/restart), and the agent survives the firmware being killed too. All 4 passed live.</p>
+        </div>
+        <div class="note">
+          <div class="tag">Live serial corruption — <code>host/fault_corruption_proxy.py</code></div>
+          <p>A byte-corrupting relay on the real QEMU↔agent link, proving live what the unit-level CRC/resync tests already prove. At 0.3% per-byte corruption: full session established, <code>/chatter</code> verified genuinely incrementing (<code>2171 → 2592</code>) while corruption continued. At 2%: never crashed or hung across 90 seconds — just slower, which is what "degrades gracefully" is supposed to mean.</p>
+        </div>
+        <div class="note">
+          <div class="tag">A task crash mid-publish — <code>host/live_fault_demo.c</code></div>
+          <p>A task runs several genuinely healthy iterations, then deliberately corrupts its own stack canary. The existing fail-safe design (checked every context switch) halts the whole process cleanly with a <code>FATAL</code> message — not "other tasks keep running," stated precisely. The last <code>/rtos/diagnostics</code> publish before the halt was confirmed completely coherent.</p>
+        </div>
+      </div>
+      <pre class="mono" style="margin-top:16px;">PASS: baseline: live data flowing before any fault (data=1152)
+PASS: firmware (QEMU) survives agent being killed mid-session
+PASS: automatic recovery after agent restart, no firmware intervention (data=1288)
+PASS: agent survives firmware being killed mid-session
+4 passed, 0 failed
+
+[faulty_worker] iteration 5: deliberately corrupting my own stack canary now
+FATAL: stack canary corrupted for task 'faulty' (id=1) -- stack overflow</pre>
+    </div>
+  </section>
+
+  <section id="p13">
+    <div class="wrap">
+      <div class="section-head"><span class="num">13</span><h2>Benchmarked against real, official micro-ROS<span class="status-pill">not just this project's own numbers</span></h2></div>
+      <p class="lede">Built the actual, unmodified <code>micro-ROS-demos/rclc/ping_pong</code> demo via <code>micro_ros_setup</code>'s official "host" platform target — the standard, hardware-free way to validate/benchmark real micro-ROS — and ran it through the exact same agent, transport, and port this project's own <code>bench_latency.c</code> already uses.</p>
+      <div class="stat-row" style="margin-top:20px;">
+        <div class="stat"><div class="sv">0.91ms</div><div class="sl">real micro-ROS p50 (native host process)</div></div>
+        <div class="stat"><div class="sv">1.17ms</div><div class="sl">real micro-ROS p95</div></div>
+        <div class="stat"><div class="sv">6.50ms</div><div class="sl">this project's p50 (QEMU-emulated Cortex-M4)</div></div>
+        <div class="stat"><div class="sv">12.46ms</div><div class="sl">this project's p95</div></div>
+      </div>
+      <div class="notes" style="margin-top:16px;">
+        <div class="note">
+          <div class="tag">Same protocol, same agent — not the same execution environment</div>
+          <p>Both are real XRCE-DDS clients speaking the identical wire protocol to the identical unmodified agent. But the real micro-ROS binary runs natively on the host CPU, while this project's numbers are a real round trip through firmware under full QEMU CPU emulation (dynamic instruction translation, a polled UART). The ~7–10x gap is best attributed to that emulation overhead, not to this project's protocol implementation being slower — stated plainly rather than picking whichever attribution flatters the result.</p>
+        </div>
+      </div>
+      <p style="margin-top:16px;">The real <code>ping_pong</code> demo doesn't correlate replies to a specific caller — it echoes any ping it didn't send itself. <code>host/bench_microros.py</code> exploits exactly that: publish a uniquely-tagged, timestamped <code>std_msgs/Header</code>, and the running unmodified demo echoes it straight back.</p>
+    </div>
+  </section>
+
+  <section id="p14">
+    <div class="wrap">
+      <div class="section-head"><span class="num">14</span><h2>Gazebo: real physics, controlled by this RTOS<span class="status-pill">verified live, 20s of real motion</span></h2></div>
+      <p class="lede">Every earlier phase proves data flows correctly. This phase changes the question: is anything on the other end actually <em>doing</em> something? <code>rtos/arm/gazebo_demo.c</code> publishes <code>geometry_msgs/Twist</code> on a simulated vehicle's <code>cmd_vel</code>, bridged by a real, unmodified <code>ros_gz_bridge</code>.</p>
+
+      <h3 style="margin-top:26px;">A real, previously-latent CDR bug, found by testing against a real subscriber for the first time</h3>
+      <p><code>xrce/src/cdr.c</code> aligned fields relative to the buffer's <em>absolute</em> start — meaning the 4-byte encapsulation header counted as already-consumed alignment. This had been the documented assumption since Phase 2, and went undetected because no message type with an 8-byte-aligned field immediately after the header had ever been live-verified before. A real RTPS reader rejected every <code>Twist</code> sample: <code>payload size of '56' bytes is larger than the history payload size of '55'</code>.</p>
+      <p>Ground-truthed the fix with <code>rclpy.serialization.serialize_message()</code> rather than guessing — the header's 4 bytes are followed by <strong>zero</strong> padding in real Fast-CDR output, not 4. Fixed in the one shared place (<code>align_base</code>, reset by <code>xrce_cdr_write_header()</code>), scoped correctly so <code>session.c</code> — which never calls that function — is provably unaffected (its existing byte-exact <code>CREATE_CLIENT</code> test still passes unchanged).</p>
+      <pre class="mono">geometry_msgs/Twist(linear.x=0.5, angular.z=0.4):
+  real rclpy:    00010000000000000000e03f...9a9999999999d93f   (52 bytes)
+  this project:  00010000000000000000e03f...9a9999999999d93f   (52 bytes)  ← EXACT MATCH
+
+sensor_msgs/Imu(frame_id="imu_link", orientation.w=1.0):
+  real rclpy:    ...00000000f03f...   (324 bytes)
+  this project:  ...00000000f03f...   (324 bytes)  ← EXACT MATCH  (previously 328 -- never caught before this phase)</pre>
+
+      <h3 style="margin-top:30px;">Verified live: real, substantial motion over 20 seconds</h3>
+      <p>Headless Gazebo (<code>gz sim -s</code>, no GUI needed), a real <code>ros_gz_bridge</code>, QEMU-booted firmware, and a real unmodified agent, all running together. The vehicle's own odometry — not a screenshot, not this project's own claim about what it sent — confirmed both axes of control were genuinely acted on:</p>
+      <div class="stat-row" style="margin-top:16px;">
+        <div class="stat"><div class="sv">(0.23, 0.05)</div><div class="sl">position @ T+0s</div></div>
+        <div class="stat"><div class="sv">(-0.39, 0.81)</div><div class="sl">position @ T+10s</div></div>
+        <div class="stat"><div class="sv">(0.10, 0.99)</div><div class="sl">position @ T+20s</div></div>
+        <div class="stat"><div class="sv">174°</div><div class="sl">orientation change from identity</div></div>
+      </div>
+      <p style="margin-top:12px;">Two more real bugs found live along the way, same discipline: a <code>msg[192]</code> XML scratch buffer too small for the longer <code>cmd_vel</code> datawriter CREATE (the same bug class <code>ros2_demo.c</code>'s own header comment already documents), and a publish-pacing loop with no MMIO access running at ~4800 Hz under QEMU's uncalibrated timing — both found and fixed by testing, not assumed.</p>
+    </div>
+  </section>
+</div>
+
 <footer>
   <div class="wrap">
     <div class="links">
@@ -1323,7 +1501,7 @@ python3 host/rtos_top.py   <span class="dim"># q to quit</span></pre>
       <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/rtos/arm/README.md">arm/README.md</a>
       <a href="https://github.com/vsntll/RTOS-Kernel-From-Scratch/blob/master/xrce/docs/design.md">xrce/design.md</a>
     </div>
-    <div>rtos-kernel-from-scratch · C · host-native + Cortex-M4 + Micro XRCE-DDS (services, actions, QoS, priority dispatch, diagnostics, live TUI)</div>
+    <div>rtos-kernel-from-scratch · C · host-native + Cortex-M4 + Micro XRCE-DDS (services, actions, QoS, priority dispatch, diagnostics, live TUI, multi-node, HMAC security, fault injection, micro-ROS benchmark, Gazebo)</div>
   </div>
 </footer>
 
@@ -1357,7 +1535,7 @@ python3 host/rtos_top.py   <span class="dim"># q to quit</span></pre>
 
   /* ---------- tabs, driven by the URL hash so every tab is a real, shareable link ---------- */
   (function () {
-    var tabIds = ['overview', 'kernel', 'ros2', 'phase7', 'phase8', 'phase9'];
+    var tabIds = ['overview', 'kernel', 'ros2', 'phase7', 'phase8', 'phase9', 'phase10'];
     var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
     var panels = {};
     tabIds.forEach(function (id) { panels[id] = document.getElementById('tab-' + id); });
@@ -1367,7 +1545,8 @@ python3 host/rtos_top.py   <span class="dim"># q to quit</span></pre>
     var sectionToTab = {
       why: 'kernel', architecture: 'kernel', roadmap: 'kernel', api: 'kernel',
       tests: 'kernel', validation: 'kernel', 'field-notes': 'kernel', run: 'kernel',
-      p7a: 'phase7', p7b: 'phase7', p7c: 'phase7', p7d: 'phase7'
+      p7a: 'phase7', p7b: 'phase7', p7c: 'phase7', p7d: 'phase7',
+      p10: 'phase10', p11: 'phase10', p12: 'phase10', p13: 'phase10', p14: 'phase10'
     };
 
     function resolveTab(hash) {
