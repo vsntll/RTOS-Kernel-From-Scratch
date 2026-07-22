@@ -14,6 +14,14 @@
  * `host/bench_latency.c` uses to measure real host<->RTOS round-trip
  * latency through this exact firmware, not a simulated stand-in for it.
  *
+ * Topic/participant names above are written as if NODE_ID were always 0
+ * for readability; every one of them actually carries a `_<NODE_ID>`
+ * suffix (rt/chatter_0, rt/chatter_1, ...) and the client_key's last byte
+ * shifts by NODE_ID too, so N copies of this same firmware built with
+ * different NODE_ID values are N distinct ROS2 nodes to the agent, not N
+ * copies of one node (Phase 10 -- see host/run_multi_node.sh and
+ * xrce/docs/design.md's Phase 10 section).
+ *
  * No RTOS task/scheduler involvement here -- this is a plain sequential
  * main(), like Phase 1/3's demos before Phase 8 added preemption; SysTick
  * is never started, so kernel_arm.c/context_switch.s are linked in only
@@ -38,8 +46,61 @@
 
 #include "uart.h"
 #include "xrce/msgs.h"
+#include "xrce/secure_transport.h"
 #include "xrce/serial_transport.h"
 #include "xrce/session.h"
+
+/* Phase 11 (security layer): SECURE_LINK, when built with -DSECURE_LINK=1,
+ * HMAC-authenticates every frame this firmware sends/receives instead of
+ * talking raw XRCE-DDS bytes directly -- see xrce/include/xrce/
+ * secure_transport.h for the wire format and threat model, and
+ * xrce/docs/design.md's Phase 11 section for why a real, unmodified agent
+ * can never be the far end of that authenticated link directly (it must
+ * be host/secure_gateway.c, which verifies/strips this layer and only
+ * then forwards plain XRCE-DDS to the real agent). Default 0 keeps `make
+ * ros2_demo` byte-identical to every earlier phase. */
+#ifndef SECURE_LINK
+#define SECURE_LINK 0
+#endif
+
+#if SECURE_LINK
+/* Demo pre-shared key -- provisioned out of band in a real deployment
+ * (e.g. at manufacture time), same honesty as this file's client_key
+ * ("RTOS" bytes) already being a fixed demo literal rather than something
+ * securely provisioned. host/secure_gateway.c's default key matches this
+ * exactly; running the gateway with any other key is Phase 11's
+ * "wrong key rejected" demo. */
+static const uint8_t g_secure_key[16] = {0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
+                                          0x13, 0x37, 0xC0, 0xDE, 0xF0, 0x0D, 0x5E, 0xED};
+static xrce_secure_ctx_t g_uplink_ctx;   /* this firmware sending -- matches the gateway's uplink receiver */
+static xrce_secure_ctx_t g_downlink_ctx; /* this firmware receiving -- matches the gateway's downlink sender */
+#endif
+
+/* Phase 10 (multi-node): NODE_ID distinguishes this instance's client_key,
+ * DDS participant name, and topic names from every other instance sharing
+ * the same `MicroXRCEAgent multiserial` process -- see
+ * xrce/docs/design.md's Phase 10 section for why client_key (not
+ * session_id) is the identity that actually matters to the agent, and
+ * host/run_multi_node.sh for how NODE_ID gets passed at build time.
+ * Defaulting to 0 keeps every existing single-node build (`make
+ * ros2_demo`) byte-identical to before this phase -- NODE_SUFFIX below is
+ * deliberately empty at NODE_ID 0 rather than "_0", specifically so
+ * host/bench_latency.c's hardcoded `rt/setpoint`/`rt/pong` (no suffix)
+ * and the README's manual `ros2 topic pub /setpoint ...` walkthrough keep
+ * working unchanged against a plain `make ros2_demo` build. */
+#ifndef NODE_ID
+#define NODE_ID 0
+#endif
+
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+#define NODE_ID_STR TOSTRING(NODE_ID)
+
+#if NODE_ID == 0
+#define NODE_SUFFIX ""
+#else
+#define NODE_SUFFIX "_" NODE_ID_STR
+#endif
 
 #define SERIAL_LOCAL_ADDR 0x00
 #define SERIAL_REMOTE_ADDR 0x00
@@ -71,7 +132,11 @@
 #define PACE_BUSY_LOOPS 5000
 
 static xrce_serial_reader_t g_rx_reader;
-static uint8_t g_rx_payload_buf[256];
+/* +XRCE_SECURE_OVERHEAD: with SECURE_LINK, a decoded frame's payload is
+ * the secure envelope (counter+tag+plain), slightly larger than the
+ * plain XRCE payload it wraps; harmless few extra bytes when
+ * SECURE_LINK=0. */
+static uint8_t g_rx_payload_buf[256 + XRCE_SECURE_OVERHEAD];
 
 static xrce_object_id_t g_participant_id;
 static xrce_object_id_t g_topic_id;
@@ -118,12 +183,12 @@ static void send_frame(const uint8_t *payload, size_t len); /* defined below */
  * host<->RTOS round-trip latency through this exact firmware. Anything
  * else (STATUS replies to our own CREATEs, etc.) is silently ignored --
  * this demo doesn't correlate replies to requests. */
-static void handle_incoming_frame(xrce_object_id_t datareader_id) {
+static void handle_incoming_frame(xrce_object_id_t datareader_id, const uint8_t *payload,
+                                   size_t payload_len) {
     xrce_object_id_t from_id;
     const uint8_t *sample;
     size_t sample_len;
-    if (!xrce_session_parse_data(g_rx_payload_buf, g_rx_reader.pos, &from_id, &sample,
-                                  &sample_len)) {
+    if (!xrce_session_parse_data(payload, payload_len, &from_id, &sample, &sample_len)) {
         return;
     }
     if (from_id.id != datareader_id.id || from_id.kind != datareader_id.kind || sample_len < 4) {
@@ -156,9 +221,27 @@ static void pace_and_poll_rx(xrce_object_id_t datareader_id, int n) {
         uint16_t frame_len;
         xrce_serial_feed_result_t res =
             xrce_serial_reader_feed(&g_rx_reader, (uint8_t)c, &src_addr, &frame_len);
-        if (res == XRCE_SERIAL_FEED_FRAME_READY) {
-            handle_incoming_frame(datareader_id);
+        if (res != XRCE_SERIAL_FEED_FRAME_READY) {
+            continue;
         }
+#if SECURE_LINK
+        const uint8_t *plain;
+        size_t plain_len;
+        xrce_secure_result_t sres =
+            xrce_secure_unwrap(&g_downlink_ctx, g_rx_payload_buf, frame_len, &plain, &plain_len);
+        if (sres != XRCE_SECURE_OK) {
+            /* Rejected: corrupted in transit, wrong key, or a replayed
+             * frame -- dropped here rather than handed to
+             * handle_incoming_frame(), same as this project's serial
+             * framing already drops a bad-CRC frame instead of acting on
+             * garbage bytes. */
+            uart_puts("REJECTED downlink frame (auth failed)\r\n");
+            continue;
+        }
+        handle_incoming_frame(datareader_id, plain, plain_len);
+#else
+        handle_incoming_frame(datareader_id, g_rx_payload_buf, frame_len);
+#endif
     }
 }
 
@@ -171,9 +254,19 @@ static void pace_and_poll_rx(xrce_object_id_t datareader_id, int n) {
  * that meant those two messages were silently never sent at all -- caught
  * by the datawriter never showing up in the agent's log despite
  * participant/topic/publisher all succeeding. */
-#define SEND_FRAME_BUF_LEN XRCE_SERIAL_MAX_ENCODED_LEN(256)
+#define SEND_FRAME_BUF_LEN XRCE_SERIAL_MAX_ENCODED_LEN(256 + XRCE_SECURE_OVERHEAD)
 
 static void send_frame(const uint8_t *payload, size_t len) {
+#if SECURE_LINK
+    uint8_t wrapped[256 + XRCE_SECURE_OVERHEAD];
+    size_t wrapped_len = xrce_secure_wrap(&g_uplink_ctx, payload, len, wrapped, sizeof(wrapped));
+    if (wrapped_len == 0) {
+        uart_puts("ERROR: secure wrap failed (payload too large)\r\n");
+        return;
+    }
+    payload = wrapped;
+    len = wrapped_len;
+#endif
     uint8_t frame[SEND_FRAME_BUF_LEN];
     size_t frame_len = xrce_serial_frame_encode(frame, sizeof(frame), SERIAL_LOCAL_ADDR,
                                                  SERIAL_REMOTE_ADDR, payload, len);
@@ -199,8 +292,9 @@ static void announce_entities(xrce_session_t *session) {
     uart_puts("-> CREATE participant\r\n");
     len = xrce_session_build_create_participant(
         session, BEST_EFFORT_STREAM_0, g_participant_id, 0,
-        "<dds><participant><rtps><name>rtos_qemu_demo</name></rtps></participant></dds>", msg,
-        sizeof(msg));
+        "<dds><participant><rtps><name>rtos_qemu_demo" NODE_SUFFIX
+        "</name></rtps></participant></dds>",
+        msg, sizeof(msg));
     send_frame(msg, len);
     pace_and_poll_rx(g_datareader_id, PACE_BUSY_LOOPS);
 
@@ -208,7 +302,7 @@ static void announce_entities(xrce_session_t *session) {
     uart_puts("-> CREATE topic (rt/chatter)\r\n");
     len = xrce_session_build_create_xml(session, BEST_EFFORT_STREAM_0, g_topic_id,
                                          g_participant_id,
-                                         "<dds><topic><name>rt/chatter</name>"
+                                         "<dds><topic><name>rt/chatter" NODE_SUFFIX "</name>"
                                          "<dataType>std_msgs::msg::dds_::Int32_</dataType></topic></dds>",
                                          msg, sizeof(msg));
     send_frame(msg, len);
@@ -226,7 +320,7 @@ static void announce_entities(xrce_session_t *session) {
     len = xrce_session_build_create_xml(session, BEST_EFFORT_STREAM_0, g_datawriter_id,
                                          g_publisher_id,
                                          "<dds><data_writer><topic><kind>NO_KEY</kind>"
-                                         "<name>rt/chatter</name>"
+                                         "<name>rt/chatter" NODE_SUFFIX "</name>"
                                          "<dataType>std_msgs::msg::dds_::Int32_</dataType>"
                                          "</topic></data_writer></dds>",
                                          msg, sizeof(msg));
@@ -240,7 +334,7 @@ static void announce_entities(xrce_session_t *session) {
     uart_puts("-> CREATE topic (rt/setpoint)\r\n");
     len = xrce_session_build_create_xml(session, BEST_EFFORT_STREAM_0, g_cmd_topic_id,
                                          g_participant_id,
-                                         "<dds><topic><name>rt/setpoint</name>"
+                                         "<dds><topic><name>rt/setpoint" NODE_SUFFIX "</name>"
                                          "<dataType>std_msgs::msg::dds_::Int32_</dataType></topic></dds>",
                                          msg, sizeof(msg));
     send_frame(msg, len);
@@ -258,7 +352,7 @@ static void announce_entities(xrce_session_t *session) {
     len = xrce_session_build_create_xml(session, BEST_EFFORT_STREAM_0, g_datareader_id,
                                          g_subscriber_id,
                                          "<dds><data_reader><topic><kind>NO_KEY</kind>"
-                                         "<name>rt/setpoint</name>"
+                                         "<name>rt/setpoint" NODE_SUFFIX "</name>"
                                          "<dataType>std_msgs::msg::dds_::Int32_</dataType>"
                                          "</topic></data_reader></dds>",
                                          msg, sizeof(msg));
@@ -283,7 +377,7 @@ static void announce_entities(xrce_session_t *session) {
     uart_puts("-> CREATE topic (rt/pong)\r\n");
     len = xrce_session_build_create_xml(session, BEST_EFFORT_STREAM_0, g_pong_topic_id,
                                          g_participant_id,
-                                         "<dds><topic><name>rt/pong</name>"
+                                         "<dds><topic><name>rt/pong" NODE_SUFFIX "</name>"
                                          "<dataType>std_msgs::msg::dds_::Int32_</dataType></topic></dds>",
                                          msg, sizeof(msg));
     send_frame(msg, len);
@@ -294,7 +388,7 @@ static void announce_entities(xrce_session_t *session) {
     len = xrce_session_build_create_xml(session, BEST_EFFORT_STREAM_0, g_pong_datawriter_id,
                                          g_publisher_id,
                                          "<dds><data_writer><topic><kind>NO_KEY</kind>"
-                                         "<name>rt/pong</name>"
+                                         "<name>rt/pong" NODE_SUFFIX "</name>"
                                          "<dataType>std_msgs::msg::dds_::Int32_</dataType>"
                                          "</topic></data_writer></dds>",
                                          msg, sizeof(msg));
@@ -306,12 +400,23 @@ int main(void) {
     uart_init();
     uart_puts("RTOS ROS2 demo: booting, sending XRCE frames over UART1\r\n");
 
-    uint8_t key[4] = {0x52, 0x54, 0x4F, 0x53}; /* "RTOS" */
+    /* "RTOS" with the last byte replaced by NODE_ID: this client_key, not
+     * session_id, is what the agent actually keys distinct clients on
+     * (xrce/docs/design.md's Phase 10 section) -- two instances sharing a
+     * key would be treated as the same client and clobber each other's
+     * entities regardless of everything else here being parametrized. */
+    uint8_t key[4] = {0x52, 0x54, 0x4F, (uint8_t)(0x53 + NODE_ID)};
     xrce_session_t session;
     xrce_session_init(&session, 0x01, key, 512);
     xrce_serial_reader_init(&g_rx_reader, SERIAL_LOCAL_ADDR, g_rx_payload_buf,
                              sizeof(g_rx_payload_buf));
     g_session = &session; /* handle_incoming_frame() echoes through this */
+#if SECURE_LINK
+    xrce_secure_init(&g_uplink_ctx, g_secure_key, sizeof(g_secure_key));
+    xrce_secure_init(&g_downlink_ctx, g_secure_key, sizeof(g_secure_key));
+    uart_puts("SECURE_LINK enabled: every frame HMAC-authenticated, "
+              "point this at host/secure_gateway.c, not a bare agent\r\n");
+#endif
 
     announce_entities(&session);
 
