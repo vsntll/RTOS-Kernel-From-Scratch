@@ -1307,9 +1307,142 @@ Nothing corrupted ever reached the ROS2 side, and -- because the process
 is gone -- no further updates ever arrive, an observable "flatline"
 rather than a stream of garbage.
 
+## Phase 14 — Gazebo: real physics, controlled by this RTOS
+
+Every earlier phase proves data flows correctly between this RTOS and a
+real ROS2 graph. This phase changes the question: is anything on the
+other end actually *doing* something as a result? `rtos/arm/gazebo_demo.c`
+publishes `geometry_msgs/Twist` on `/model/vehicle_blue/cmd_vel` -- the
+exact topic gz-sim's own bundled `diff_drive.sdf` world documents in its
+own header comment as the way to drive it -- bridged into Gazebo's
+transport by a real, unmodified `ros_gz_bridge parameter_bridge`, the
+same "real, unmodified" bar Option A already holds the XRCE-DDS agent to.
+
+**New message type: `geometry_msgs/Twist`** (`xrce/include/xrce/msgs.h`,
+`xrce/src/msgs.c`) -- just two `Vector3`s (`linear`, `angular`), reusing
+the `write_vec3()`/`read_vec3()` helpers `sensor_msgs/Imu`'s
+`angular_velocity`/`linear_acceleration` fields already exercise, so no
+new CDR primitive work was needed.
+
+**A real, previously-latent bug in the shared CDR layer, found by testing
+against a real subscriber for the first time.** `xrce/src/cdr.c`'s
+`align_writer()`/`align_reader()` computed each field's alignment padding
+relative to the buffer's *absolute* start -- meaning the 4-byte CDR_LE
+encapsulation header counted as already-consumed alignment. This had been
+the documented assumption since Phase 2 (`xrce/include/xrce/cdr.h`'s own
+header comment claimed it "matches Fast-CDR's behavior"). It went
+undetected because every message type previously verified *live* against
+a real ROS2 subscriber (`std_msgs/Int32`) has only 4-byte-aligned fields,
+where the discrepancy can't manifest; `sensor_msgs/Imu` was CDR-tested
+only, never live-verified end to end (`xrce/docs/design.md`'s own
+Phase 6 "known limitations" already said as much).
+`geometry_msgs/Twist` -- header immediately followed by a `float64`, the
+simplest possible case where the two schemes disagree -- was the first
+message type built on these helpers to actually get tested against a
+real subscriber, and it surfaced immediately: the real RTPS reader
+rejected every sample with
+`Change payload size of '56' bytes is larger than the history payload
+size of '55' bytes and cannot be resized`, logged as `A message was
+lost!!!` on the ROS2 side.
+
+Ground-truthed the correct behavior rather than guessing a fix: used
+`rclpy.serialization.serialize_message()` to capture the actual wire
+bytes a real ROS2 node produces for both message types.
+
+```
+Twist(linear.x=0.5, angular.z=0.4), real rclpy serialization (52 bytes):
+00010000 000000000000e03f 00000000 00000000 00000000 00000000 00000000 9a999999 9999d93f
+header   linear.x=0.5      linear.y  linear.z  angular.x angular.y angular.z=0.4 (no padding anywhere)
+```
+
+The header's 4 bytes are immediately followed by `linear.x` with **zero**
+padding -- confirming alignment resets to a fresh offset 0 right after
+the header, not offset 4. Fixed by adding an explicit `align_base` field
+to `xrce_cdr_writer_t`/`xrce_cdr_reader_t` (0 by default, set to the
+post-header position by `xrce_cdr_write_header()`/`xrce_cdr_read_header()`
+if either is called) and computing alignment as `(pos - align_base) % n`
+instead of `pos % n`. Critically, this is scoped correctly rather than a
+global behavior change: `xrce/src/session.c` builds its own message/
+submessage headers and never calls `xrce_cdr_write_header()` at all, so
+its writer/reader instances keep `align_base == 0` from `_init()` and are
+completely unaffected -- confirmed by `test_session.c`'s existing
+byte-exact `CREATE_CLIENT` test still passing unchanged after the fix.
+
+**Verified byte-for-byte identical to real ROS2 serialization, not just
+"it round-trips"** -- both message types affected by the bug:
+
+```
+sensor_msgs/Imu (frame_id="imu_link", orientation.w=1.0):
+  real rclpy:  00010000...00000000f03f000...  (324 bytes)
+  this project: 00010000...00000000f03f000...  (324 bytes)  -- EXACT MATCH
+  (previously 328 bytes -- 4 bytes of spurious padding, never caught before this phase)
+
+geometry_msgs/Twist (linear.x=0.5, angular.z=0.4):
+  real rclpy:  00010000000000000000e03f...9a9999999999d93f  (52 bytes)
+  this project: 00010000000000000000e03f...9a9999999999d93f  (52 bytes)  -- EXACT MATCH
+```
+
+`xrce/tests/test_cdr.c`'s own `case_alignment_byte_exact` hand-derived
+expected bytes were quietly relying on the same wrong assumption (a
+24-byte layout with padding before the `float64` that shouldn't be
+there) -- corrected to the real 20-byte layout as part of this fix, not
+left contradicting the newly-corrected behavior.
+
+**Two more real bugs found live, same "test against the real thing"
+discipline, both familiar classes from earlier phases:**
+- `gazebo_demo.c`'s `announce_entities()` used a `msg[192]` scratch
+  buffer -- too small for the `cmd_vel` datawriter CREATE's XML, which is
+  longer than `ros2_demo.c`'s equivalent (`rt/model/vehicle_blue/cmd_vel`
+  is a longer topic name, wrapped in more tag overhead than a plain topic
+  CREATE needs). `xrce_session_build_create_xml()` fails safe (returns 0)
+  rather than corrupting memory, but that meant the datawriter CREATE was
+  silently never sent -- caught the same way `ros2_demo.c`'s own
+  original instance of this exact bug class was caught: the datawriter
+  never showing up in the agent's log despite participant/topic/publisher
+  all succeeding. Fixed by bumping the buffer to 256 bytes.
+- The publish-pacing loop (`pace()`), unlike `ros2_demo.c`'s own pacing
+  (which incidentally polls a real UART MMIO register every iteration),
+  had no memory access at all -- confirmed via `ros2 topic hz
+  /model/vehicle_blue/cmd_vel` to run at roughly 4800 Hz with the same
+  `PACE_BUSY_LOOPS` constant `ros2_demo.c` uses, an order of magnitude
+  faster than intended. A 40x increase to the loop count barely changed
+  the measured rate, and later investigation found the real confound:
+  several earlier test iterations' QEMU/bridge/agent processes had been
+  left running (a cleanup gap in this session, not a code bug), all
+  competing for host CPU and making timing measurements unreliable.
+  Fixed the loop itself to also poll UART RX (discarding the result --
+  this firmware never reads a downlink command) so its per-iteration
+  cost is realistic, and killed the accumulated stray processes before
+  the final verification run.
+
+**Verified live end to end**, with `gz sim -s -r diff_drive.sdf`
+(headless, no GUI needed), a real `ros_gz_bridge parameter_bridge`
+bridging `/model/vehicle_blue/cmd_vel` and `/model/vehicle_blue/odometry`,
+QEMU-booted `gazebo_demo.c`, and a real, unmodified `MicroXRCEAgent`, all
+running together:
+- The full entity chain (`CREATE_CLIENT` -> participant -> topic ->
+  publisher -> datawriter) succeeded, confirmed in the agent's own log.
+- The vehicle's own odometry -- not a screenshot, not this project's own
+  claim about what it sent -- showed substantial, continuous position
+  change over a 20-second window: `(0.228, 0.051)` ->
+  `(-0.386, 0.810)` -> `(0.099, 0.994)`, and a real orientation change
+  (`orientation.z = 0.996, orientation.w = 0.090` -- roughly a
+  174-degree turn from identity), confirming both the `linear.x` and
+  `angular.z` components of the published `Twist` were genuinely acted
+  on by Gazebo's physics, not merely received.
+
+**Known limitation, stated plainly:** the exact publish rate under QEMU's
+TCG timing is not calibrated to any particular real-world frequency (the
+same "QEMU's core clock is uncalibrated" caveat this project already
+states elsewhere, e.g. Phase 6/9) -- the demo's straight/turn phase
+pattern is not reliably distinguishable as two separate segments at the
+rate observed; what's verified is that the simulated vehicle responds
+correctly to whatever rate of commands actually arrives, not that this
+particular demo's phases produce a clean two-segment trajectory.
+
 ## Later phases
 
-Every planned phase (1-12) has now landed. Future work, if any, gets
+Every planned phase (1-12, 14) has now landed. Future work, if any, gets
 tracked at the top-level project plan level; this file's convention (a
 new dated section per phase) stops here since there are no more phases
 queued.
